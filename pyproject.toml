@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orbital-gym"
+version = "0.1.0"
+description = "2D two-stage-to-orbit Gymnasium environment: climb out of the atmosphere, then stay there."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "gymnasium>=1.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+render = ["pygame>=2.5"]
+train = ["stable-baselines3>=2.3"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["orbital_gym*"]
