@@ -3,9 +3,11 @@
     to_orbit.py          TwoStageToOrbit-v0   launch into a stable orbit
     orbit_and_return.py  OrbitAndReturn-v0    orbit half a revolution, then
                                               come home to the launch pad
+    to_moon.py           ToMoon-v0            orbit, hold, then transfer to a moon site
 """
 
 from .to_orbit import TwoStageToOrbitEnv
 from .orbit_and_return import OrbitAndReturnEnv
+from .to_moon import ToMoonEnv
 
-__all__ = ["TwoStageToOrbitEnv", "OrbitAndReturnEnv"]
+__all__ = ["TwoStageToOrbitEnv", "OrbitAndReturnEnv", "ToMoonEnv"]

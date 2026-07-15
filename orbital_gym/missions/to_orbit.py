@@ -219,6 +219,14 @@ class TwoStageToOrbitEnv(gym.Env):
 
     # --- Physics ------------------------------------------------------------
 
+    def _extra_acceleration(self, rx: float, ry: float, vx: float, vy: float) -> tuple[float, float]:
+        """Mission-specific acceleration term (default none).
+
+        Subclasses can override this to add third-body gravity, SRP, etc.
+        Returned values are added to translational acceleration in m/s^2.
+        """
+        return 0.0, 0.0
+
     def _substep(self, throttle: float, turn_rate: float) -> None:
         dt = self.physics_dt
         p = self.planet
@@ -230,6 +238,9 @@ class TwoStageToOrbitEnv(gym.Env):
 
         g = -p.mu / (rn * rn * rn)
         ax, ay = g * rx, g * ry
+        ax_extra, ay_extra = self._extra_acceleration(rx, ry, vx, vy)
+        ax += ax_extra
+        ay += ay_extra
 
         stage = self.rocket.stages[self._stage]
         self._throttle_actual = 0.0

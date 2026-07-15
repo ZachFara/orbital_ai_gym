@@ -2,6 +2,7 @@
 
     pip install -e ".[train]"
     python scripts/train_ppo.py                          # 1M steps
+    python scripts/train_ppo.py --device mps            # force Apple GPU
     python scripts/train_ppo.py --out models/my_run      # named run
     python scripts/train_ppo.py --eval 5 --watch models/<run>.zip
     python scripts/train_ppo.py --watch models/<run>.zip # fly it in the UI
@@ -40,9 +41,9 @@ def make_env():
     return TwoStageToOrbitEnv()
 
 
-def evaluate(model_path: str, episodes: int) -> None:
+def evaluate(model_path: str, episodes: int, device: str) -> None:
     env = make_env()
-    model = PPO.load(model_path)
+    model = PPO.load(model_path, device=device)
     holds = 0
     returns = []
     for ep in range(episodes):
@@ -73,6 +74,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=1_000_000)
     ap.add_argument("--envs", type=int, default=8)
+    ap.add_argument(
+        "--device",
+        default="auto",
+        help="torch device for train/eval/watch (examples: auto, cpu, cuda, mps)",
+    )
     ap.add_argument("--out", default=None,
                     help="model save path (default: models/ppo_orbit_<timestamp>)")
     ap.add_argument("--watch", default=None, help="path to a saved model to watch")
@@ -82,14 +88,14 @@ def main():
     if args.eval:
         if not (args.watch or args.out):
             raise SystemExit("--eval needs a model: --watch models/<run>.zip")
-        evaluate(args.watch or args.out, args.eval)
+        evaluate(args.watch or args.out, args.eval, args.device)
         return
 
     if args.watch:
         import pygame
 
         env = TwoStageToOrbitEnv(render_mode="human")
-        model = PPO.load(args.watch)
+        model = PPO.load(args.watch, device=args.device)
         obs, info = env.reset()
         env.render()  # create the window before polling its events
         while True:
@@ -123,6 +129,7 @@ def main():
         gamma=GAMMA,
         gae_lambda=0.98,
         ent_coef=0.003,
+        device=args.device,
         seed=0,
         verbose=1,
     )

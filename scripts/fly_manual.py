@@ -1,6 +1,6 @@
 """Fly the rocket yourself with the keyboard.
 
-    python scripts/fly_manual.py [--planet easy|earth] [--auto-stage]
+    python scripts/fly_manual.py [--mission orbit|return|moon] [--planet easy|earth] [--auto-stage]
 
 Controls:
     left/right   rotate
@@ -20,16 +20,24 @@ import argparse
 import numpy as np
 import pygame
 
+from orbital_gym.missions.orbit_and_return import OrbitAndReturnEnv
+from orbital_gym.missions.to_moon import ToMoonEnv
 from orbital_gym.missions.to_orbit import TwoStageToOrbitEnv
 
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--mission", default="orbit", choices=["orbit", "return", "moon"])
     ap.add_argument("--planet", default="easy", choices=["easy", "earth"])
     ap.add_argument("--auto-stage", action="store_true")
     args = ap.parse_args()
 
-    env = TwoStageToOrbitEnv(
+    env_cls = {
+        "orbit": TwoStageToOrbitEnv,
+        "return": OrbitAndReturnEnv,
+        "moon": ToMoonEnv,
+    }[args.mission]
+    env = env_cls(
         planet=args.planet,
         auto_stage=args.auto_stage,
         render_mode="human",

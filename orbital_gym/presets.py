@@ -35,6 +35,16 @@ class Planet:
 
 
 @dataclass(frozen=True)
+class Moon:
+    name: str
+    radius: float          # m
+    mu: float              # m^3/s^2
+    orbit_radius: float    # m, circular orbit around the planet center
+    orbit_period: float    # s
+    site_angle: float = 0.0  # rad, site angle around moon body in moon frame
+
+
+@dataclass(frozen=True)
 class Stage:
     dry_mass: float   # kg, structure + engine (top stage: includes payload)
     prop_mass: float  # kg
@@ -97,6 +107,26 @@ PLANETS: dict[str, Planet] = {
         rho0=1.225,
         scale_height=8_500.0,
         space_altitude=100_000.0,
+    ),
+}
+
+MOONS: dict[str, Moon] = {
+    # Gameplay moons (short-period transfers suitable for RL episodes).
+    "easy": Moon(
+        name="easy_moon",
+        radius=160_000.0,
+        mu=2.4e11,
+        orbit_radius=2_400_000.0,
+        orbit_period=7_200.0,
+        site_angle=0.0,
+    ),
+    "earth": Moon(
+        name="earth_moon_arcade",
+        radius=700_000.0,
+        mu=8.0e12,
+        orbit_radius=18_000_000.0,
+        orbit_period=28_000.0,
+        site_angle=0.0,
     ),
 }
 

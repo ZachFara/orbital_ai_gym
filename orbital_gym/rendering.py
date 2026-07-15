@@ -39,6 +39,9 @@ ORBIT_PATH = (168, 156, 235)
 BODY = (232, 234, 240)
 BODY_SHADE = (176, 182, 196)
 BOOSTER = (196, 200, 210)
+MOON = (190, 196, 208)
+MOON_SHADE = (142, 150, 166)
+MOON_SITE = (255, 214, 110)
 INTERSTAGE = (60, 64, 78)
 FLAME_OUT = (255, 140, 40)
 FLAME_IN = (255, 224, 120)
@@ -312,6 +315,28 @@ class Renderer:
                 self.pg.draw.aaline(self.surf, color, prev, s)
             prev = s if ok else None
 
+    def _draw_secondary_bodies(self, cam):
+        env = self.env
+        if not hasattr(env, "_moon_world"):
+            return
+        try:
+            mx, my = env._moon_world()
+            sx, sy = env._moon_site_world()
+            mr = env.moon.radius
+        except Exception:
+            return
+
+        center = self._to_screen(mx, my, cam)
+        if self._on_screen(center, margin=200):
+            r_px = max(3.0, mr * cam[2])
+            self.pg.draw.circle(self.surf, MOON, center, r_px)
+            self.pg.draw.circle(self.surf, MOON_SHADE, center, r_px, width=2)
+            site = self._to_screen(sx, sy, cam)
+            if self._on_screen(site, margin=100):
+                self.pg.draw.circle(self.surf, MOON_SITE, site, 4)
+                self.surf.blit(self.font_small.render("site", True, MOON_SITE),
+                               (site[0] + 6, site[1] - 6))
+
     # --- rocket -----------------------------------------------------------------
 
     def _frame_fn(self, world_pos, theta, size, cam):
@@ -484,6 +509,7 @@ class Renderer:
         self._draw_surface_features(cam)
         self._draw_space_line(cam)
         self._draw_orbit(cam)
+        self._draw_secondary_bodies(cam)
         self._draw_trail(cam)
         self._draw_rocket(cam)
         self._draw_hud()

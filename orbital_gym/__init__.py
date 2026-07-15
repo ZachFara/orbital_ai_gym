@@ -10,17 +10,21 @@
 
 from gymnasium.envs.registration import register
 
-from .presets import PLANETS, ROCKETS, Planet, Rocket, Stage, describe, total_delta_v
+from .presets import MOONS, PLANETS, ROCKETS, Moon, Planet, Rocket, Stage, describe, total_delta_v
 from .missions.to_orbit import TwoStageToOrbitEnv
 from .missions.orbit_and_return import OrbitAndReturnEnv
+from .missions.to_moon import ToMoonEnv
 
 __version__ = "0.1.0"
 __all__ = [
     "TwoStageToOrbitEnv",
     "OrbitAndReturnEnv",
+    "ToMoonEnv",
+    "Moon",
     "Planet",
     "Rocket",
     "Stage",
+    "MOONS",
     "PLANETS",
     "ROCKETS",
     "describe",
@@ -37,5 +41,10 @@ register(
 register(
     id="OrbitAndReturn-v0",
     entry_point="orbital_gym.missions.orbit_and_return:OrbitAndReturnEnv",
+    max_episode_steps=None,
+)
+register(
+    id="ToMoon-v0",
+    entry_point="orbital_gym.missions.to_moon:ToMoonEnv",
     max_episode_steps=None,
 )
