@@ -1,16 +1,21 @@
 """Train PPO on TwoStageToOrbit with Stable-Baselines3.
 
     pip install -e ".[train]"
-    python scripts/train_ppo.py --steps 3_000_000
-    python scripts/train_ppo.py --eval 20                # headless success rate
-    python scripts/train_ppo.py --watch models/ppo_orbit.zip
+    python scripts/train_ppo.py                          # 1M steps
+    python scripts/train_ppo.py --out models/my_run      # named run
+    python scripts/train_ppo.py --eval 5 --watch models/<run>.zip
+    python scripts/train_ppo.py --watch models/<run>.zip # fly it in the UI
+
+Every run saves under a fresh name (timestamped unless --out is given), so
+training never overwrites an older model.
 
 Trains WITHOUT terminate_on_orbit: episodes run to the time limit, so the
 policy must not only reach orbit but hold it for the rest of the episode.
 (The terminate-on-orbit shortcut is reward-equivalent but produces policies
 that have never seen a post-orbit state and fly themselves back into the
 ground once one appears.) Episode returns for orientation: ~0 tumble/crash,
-~100-900 suborbital lobs, ~3400-4000 reaching and keeping orbit.
+~100-900 suborbital lobs, ~4000 loitering on a wild barely-bound ellipse,
+~7500+ reaching a *circular* orbit and keeping it to the time limit.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import time
 
 try:
     from stable_baselines3 import PPO
@@ -25,7 +31,7 @@ try:
 except ImportError:
     raise SystemExit("stable-baselines3 not installed; run: pip install -e '.[train]'")
 
-from orbital_gym.two_stage_env import TwoStageToOrbitEnv
+from orbital_gym.missions.to_orbit import TwoStageToOrbitEnv
 
 GAMMA = 0.999  # long horizon: the duration reward arrives late
 
@@ -56,6 +62,7 @@ def evaluate(model_path: str, episodes: int) -> None:
         print(f"ep {ep + 1:2d}: {info['termination']:<10} return {info['episode_return']:7.1f}  "
               f"in space {space_s:5.0f} s  "
               f"final orbit {info['periapsis'] / 1000:6.1f} x {apo_s} km  "
+              f"e {info['eccentricity']:5.3f}  "
               f"dv used {info['dv_used']:4.0f} m/s{'  HELD ORBIT' if held else ''}")
     print("-" * 64)
     print(f"held orbit to time limit {holds}/{episodes}  "
@@ -64,14 +71,17 @@ def evaluate(model_path: str, episodes: int) -> None:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--steps", type=int, default=3_000_000)
+    ap.add_argument("--steps", type=int, default=1_000_000)
     ap.add_argument("--envs", type=int, default=8)
-    ap.add_argument("--out", default="models/ppo_orbit")
+    ap.add_argument("--out", default=None,
+                    help="model save path (default: models/ppo_orbit_<timestamp>)")
     ap.add_argument("--watch", default=None, help="path to a saved model to watch")
     ap.add_argument("--eval", type=int, default=0, help="evaluate N episodes headless")
     args = ap.parse_args()
 
     if args.eval:
+        if not (args.watch or args.out):
+            raise SystemExit("--eval needs a model: --watch models/<run>.zip")
         evaluate(args.watch or args.out, args.eval)
         return
 
@@ -116,11 +126,12 @@ def main():
         seed=0,
         verbose=1,
     )
+    out = args.out or time.strftime("models/ppo_orbit_%Y%m%d_%H%M%S")
     model.learn(total_timesteps=args.steps)
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    model.save(args.out)
-    vec.save(args.out + "_vecnorm.pkl")
-    print(f"saved to {args.out}.zip")
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    model.save(out)
+    vec.save(out + "_vecnorm.pkl")
+    print(f"saved to {out}.zip")
 
 
 if __name__ == "__main__":

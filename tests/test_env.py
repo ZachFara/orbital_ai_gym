@@ -7,7 +7,7 @@ from gymnasium.utils.env_checker import check_env
 
 import orbital_gym
 from orbital_gym.presets import G0, PLANETS, ROCKETS, stage_delta_v, total_delta_v
-from orbital_gym.two_stage_env import TwoStageToOrbitEnv
+from orbital_gym.missions.to_orbit import TwoStageToOrbitEnv
 
 IDLE = np.array([-1.0, 0.0], dtype=np.float32)   # throttle 0, no turn
 BURN = np.array([1.0, 0.0], dtype=np.float32)    # full throttle, hold attitude
@@ -94,7 +94,7 @@ def test_orbit_energy_conserved_without_thrust():
 
 
 def test_space_reward_is_time_above_cutoff():
-    env = TwoStageToOrbitEnv()
+    env = TwoStageToOrbitEnv(orbit_rate=0.0)  # isolate the space term
     env.reset()
     p = env.planet
     alt = 200_000.0
@@ -105,6 +105,45 @@ def test_space_reward_is_time_above_cutoff():
         total += r
     # 50 steps x 1 s x space_rate, no climb reward (already above the cutoff)
     assert total == pytest.approx(50.0 * env.space_rate * env.step_duration, rel=1e-6)
+
+
+def test_circularity_reward_pays_for_round_orbits_only():
+    env = TwoStageToOrbitEnv()
+    env.reset()
+    p = env.planet
+    alt = 200_000.0
+
+    # Circular orbit: space_rate plus nearly the full orbit_rate per second.
+    env._teleport(0.0, p.radius + alt, p.circular_velocity(alt), 0.0)
+    total, info = 0.0, None
+    for _ in range(50):
+        _, r, *_, info = env.step(IDLE)
+        total += r
+    assert info["orbit"] and info["circularity"] > 0.95
+    expected = 50.0 * (env.space_rate + env.orbit_rate * info["circularity"])
+    assert total == pytest.approx(expected * env.step_duration, rel=0.01)
+
+    # The giant-ellipse exploit: in space, but periapsis buried in the planet.
+    # Only the plain space reward accrues, so circularizing dominates it.
+    env.reset()
+    env._teleport(0.0, p.radius + alt, 0.4 * p.circular_velocity(alt), 100.0)
+    total = 0.0
+    for _ in range(30):
+        _, r, *_, info = env.step(IDLE)
+        total += r
+    assert not info["orbit"] and info["periapsis"] < 0.0
+    assert total == pytest.approx(30.0 * env.space_rate * env.step_duration, rel=1e-6)
+
+
+def test_turn_penalty_discourages_spinning():
+    env = TwoStageToOrbitEnv()
+    env.reset()
+    spin = np.array([-1.0, 1.0], dtype=np.float32)  # throttle 0, full turn
+    total = 0.0
+    for _ in range(20):
+        _, r, *_ = env.step(spin)
+        total += r
+    assert total == pytest.approx(-20.0 * env.turn_penalty * env.step_duration, rel=1e-6)
 
 
 def test_crash_penalty_and_termination():
@@ -143,9 +182,8 @@ def test_terminate_on_orbit_bonus():
     _, reward, terminated, _, info = env.step(IDLE)
     assert terminated and info["termination"] == "orbit"
     remaining = env.max_episode_steps - 1
-    assert reward == pytest.approx(
-        env.space_rate * env.step_duration * (remaining + 1), rel=0.01
-    )
+    rate = env.space_rate + env.orbit_rate * info["circularity"]
+    assert reward == pytest.approx(rate * env.step_duration * (remaining + 1), rel=0.01)
 
 
 def test_rgb_array_render_headless():

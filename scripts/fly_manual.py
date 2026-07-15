@@ -20,7 +20,7 @@ import argparse
 import numpy as np
 import pygame
 
-from orbital_gym.two_stage_env import TwoStageToOrbitEnv
+from orbital_gym.missions.to_orbit import TwoStageToOrbitEnv
 
 
 def main():

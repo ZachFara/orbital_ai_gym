@@ -227,9 +227,14 @@ class Renderer:
         pg = self.pg
         p = self.env.planet
         ppm = cam[2]
-        if ppm < 0.012:  # features would be sub-pixel noise
-            return
         R = p.radius
+        if ppm < 0.012:  # features would be sub-pixel noise; mark the pad instead
+            s = self._to_screen(0.0, R, cam)
+            if self._on_screen(s, margin=0):
+                pg.draw.circle(self.surf, PAD, s, 3)
+                self.surf.blit(self.font_small.render("pad", True, TEXT_DIM),
+                               (s[0] + 6, s[1] - 6))
+            return
 
         def at(arc_m, up_m):
             a = math.pi / 2 + arc_m / R  # pad is at angle pi/2
@@ -425,8 +430,19 @@ class Renderer:
             pg.draw.rect(self.surf, THROTTLE, (W - 138, y, 118 * thr, 12), border_radius=3)
 
         # status badge
-        if env._terminal is None and info["in_space"]:
-            text, color = ("ORBIT", GOOD) if info["orbit"] else ("IN SPACE", ACCENT)
+        badge_text = None
+        if env._terminal is None and info.get("returning"):
+            badge_text = f"RETURN   {info['pad_downrange'] / 1000:.0f} km to pad", ACCENT
+        elif env._terminal is None and info["in_space"]:
+            if info["orbit"]:
+                text = "ORBIT"
+                if "orbit_progress" in info:
+                    text = f"ORBIT   hold {info['orbit_progress']:.0%}"
+                badge_text = text, GOOD
+            else:
+                badge_text = "IN SPACE", ACCENT
+        if badge_text is not None:
+            text, color = badge_text
             badge = self.font.render(text, True, color)
             bw = badge.get_width() + 20
             panel = self._panel(bw, 26, alpha=170)
@@ -437,14 +453,17 @@ class Renderer:
             msgs = {
                 "crashed": ("CRASHED", BAD),
                 "landed": ("LANDED", TEXT),
+                "landed_on_pad": ("LANDED ON THE PAD", GOOD),
                 "escaped": ("ESCAPED THE PLANET", ORBIT_PATH),
                 "orbit": ("STABLE ORBIT", GOOD),
                 "time_limit": ("TIME'S UP", TEXT),
             }
             text, color = msgs.get(env._terminal, (env._terminal.upper(), TEXT))
             banner = self.font_big.render(text, True, color)
-            sub = self.font.render(
-                f"return {info['episode_return']:.1f}", True, TEXT_DIM)
+            sub_text = f"return {info['episode_return']:.1f}"
+            if info.get("returning") and env._terminal in ("landed", "landed_on_pad", "crashed"):
+                sub_text += f"   {info['pad_downrange'] / 1000:.1f} km from pad"
+            sub = self.font.render(sub_text, True, TEXT_DIM)
             bw = max(banner.get_width(), sub.get_width()) + 48
             panel = self._panel(bw, 74, alpha=190)
             self.surf.blit(panel, (W / 2 - bw / 2, H / 2 - 60))
