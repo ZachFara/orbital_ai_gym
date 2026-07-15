@@ -121,6 +121,8 @@ class TwoStageToOrbitEnv(gym.Env):
         self._throttle_actual = 0.0
         self._airborne = False
         self._terminal: str | None = None
+        self._episode_return = 0.0
+        self._debris: dict | None = None
         self._trail: list[tuple[float, float]] = [(self._rx, self._ry)]
         return self._obs(), self._info()
 
@@ -180,6 +182,7 @@ class TwoStageToOrbitEnv(gym.Env):
         if truncated:
             self._terminal = "time_limit"
 
+        self._episode_return += reward
         if self.render_mode == "human":
             self.render()
         return self._obs(), float(reward), terminated, truncated, self._info()
@@ -255,13 +258,42 @@ class TwoStageToOrbitEnv(gym.Env):
         if rn - p.radius > 100.0:
             self._airborne = True
 
+        d = self._debris
+        if d is not None:  # the jettisoned stage falls ballistically (visual only)
+            dn = math.hypot(d["rx"], d["ry"])
+            gd = -p.mu / (dn * dn * dn)
+            ax_d, ay_d = gd * d["rx"], gd * d["ry"]
+            rho_d = p.density(dn - p.radius)
+            if rho_d > 0.0:
+                sp = math.hypot(d["vx"], d["vy"])
+                kd = -0.5 * rho_d * d["cd_area"] * sp / d["mass"]
+                ax_d += kd * d["vx"]
+                ay_d += kd * d["vy"]
+            d["vx"] += ax_d * dt
+            d["vy"] += ay_d * dt
+            d["rx"] += d["vx"] * dt
+            d["ry"] += d["vy"] * dt
+            d["theta"] += d["spin"] * dt
+            d["age"] += dt
+            if math.hypot(d["rx"], d["ry"]) <= p.radius or d["age"] > 300.0:
+                self._debris = None
+
         if self.auto_stage and self._fuel <= 0.0 and self._stage < len(self.rocket.stages) - 1:
             self._next_stage()
 
     def _next_stage(self) -> None:
         if self._stage >= len(self.rocket.stages) - 1:
             return
-        self._mass -= self.rocket.stages[self._stage].dry_mass + self._fuel
+        dropped = self.rocket.stages[self._stage]
+        self._debris = {
+            "rx": self._rx, "ry": self._ry,
+            "vx": self._vx - 3.0 * math.cos(self._theta),
+            "vy": self._vy - 3.0 * math.sin(self._theta),
+            "theta": self._theta, "spin": 0.5 if self._steps % 2 else -0.5,
+            "age": 0.0, "cd_area": dropped.cd_area,
+            "mass": max(1.0, dropped.dry_mass),
+        }
+        self._mass -= dropped.dry_mass + self._fuel
         self._stage += 1
         self._fuel = self.rocket.stages[self._stage].prop_mass
 
@@ -367,6 +399,7 @@ class TwoStageToOrbitEnv(gym.Env):
             "dynamic_pressure": 0.5 * rho * speed * speed,
             "dv_used": self._dv_used,
             "dv_remaining": self.delta_v_remaining(),
+            "episode_return": self._episode_return,
             "in_space": alt > self.planet.space_altitude,
             "orbit": bool(
                 alt > self.planet.space_altitude

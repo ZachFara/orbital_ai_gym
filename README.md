@@ -52,6 +52,11 @@ Fly it yourself (arrows steer, space toggles throttle, `s` stages, 1/2/3 time wa
 python scripts/fly_manual.py
 ```
 
+The flight view climbs with you: launch pad and hills at liftoff, layered sky
+fading to stars, the jettisoned booster tumbling away at staging, and — once
+your periapsis leaves the ground — a KSP-style pull-out to a whole-planet map
+view with your predicted orbit ellipse and Ap/Pe markers.
+
 Train PPO (needs `pip install -e ".[train]"`):
 
 ```bash
