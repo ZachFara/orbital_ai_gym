@@ -7,9 +7,15 @@ This mission inherits the same ascent/orbit shaping as TwoStageToOrbit:
 - tiny turn penalty from the base step() path
 
 After holding a stable orbit for `orbit_fraction` of a revolution (default half),
-phase 2 begins and reward switches to potential-based progress toward a site on
-an orbiting moon. Third-body moon gravity is included via the base mission's
-_extra_acceleration() hook.
+phase 2 begins and the reward switches to potential-based progress toward a
+site on an orbiting moon -- and the base duration rewards stop, exactly as in
+OrbitAndReturn: if space time kept paying, loitering to the time limit would
+strictly beat landing (a trained policy demonstrated this before the fix).
+A soft touchdown (relative speed <= moon_landing_speed) within
+moon_site_radius of the site ends as "landed_moon_site" (+moon_site_bonus);
+soft anywhere else on the moon ends as "landed_moon" (+moon_land_bonus);
+anything harder is a crash. Third-body moon gravity is included via the base
+mission's _extra_acceleration() hook.
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         hold_reward: float = 100.0,
         transfer_reward: float = 400.0,
         moon_site_bonus: float = 500.0,
+        moon_land_bonus: float = 250.0,
         moon_site_radius: float = 8_000.0,
         moon_landing_speed: float = 25.0,
         render_mode: str | None = None,
@@ -58,6 +65,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         self.hold_reward = hold_reward
         self.transfer_reward = transfer_reward
         self.moon_site_bonus = moon_site_bonus
+        self.moon_land_bonus = moon_land_bonus
         self.moon_site_radius = moon_site_radius
         self.moon_landing_speed = moon_landing_speed
 
@@ -149,27 +157,29 @@ class ToMoonEnv(TwoStageToOrbitEnv):
     # --- Reward ---------------------------------------------------------------
 
     def _step_reward(self, alt_before: float, alt_after: float, space_time: float) -> float:
-        reward = super()._step_reward(alt_before, alt_after, space_time)
-
-        # Impact handling against moon surface.
+        # Impact handling against the moon surface, in any phase. A soft
+        # touchdown anywhere on the moon is a landing (a smaller bonus off
+        # the site); the crash penalty is applied by step() from _terminal.
         moon_d = self._moon_distance()
         if moon_d <= self.moon.radius:
             mvx, mvy = self._moon_velocity()
             rel_speed = math.hypot(self._vx - mvx, self._vy - mvy)
             site_d = self._moon_site_distance()
-            if rel_speed <= self.moon_landing_speed and site_d <= self.moon_site_radius:
-                reward += self.moon_site_bonus
-                self._terminal = "landed_moon_site"
-            else:
-                reward -= self.crash_penalty
+            if rel_speed > self.moon_landing_speed:
                 self._terminal = "crashed"
-            return reward
+                return 0.0
+            if site_d <= self.moon_site_radius:
+                self._terminal = "landed_moon_site"
+                return self.moon_site_bonus
+            self._terminal = "landed_moon"
+            return self.moon_land_bonus
 
         ang = math.atan2(self._ry, self._rx)
         d_ang = abs(_wrap_pi(ang - self._last_ang))
         self._last_ang = ang
 
         if not self._transfer:
+            reward = super()._step_reward(alt_before, alt_after, space_time)
             cutoff = self.planet.space_altitude
             peri, _, energy, ecc = self._orbit_elements()
             if alt_after > cutoff and energy < 0.0 and peri > cutoff:
@@ -183,8 +193,12 @@ class ToMoonEnv(TwoStageToOrbitEnv):
                     self._last_site_d = self._moon_site_distance()
             return reward
 
+        # Transfer phase: potential-based progress toward the site only.
+        # The base duration rewards must stop here, or loitering in orbit
+        # to the time limit strictly beats landing (RL found this exploit
+        # immediately: return 8722 by never landing at all).
         site_d = self._moon_site_distance()
-        reward += self.transfer_reward * (self._last_site_d - site_d) / self._moon_d_scale
+        reward = self.transfer_reward * (self._last_site_d - site_d) / self._moon_d_scale
         self._last_site_d = site_d
         return reward
 

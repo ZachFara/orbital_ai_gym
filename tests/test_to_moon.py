@@ -42,3 +42,33 @@ def test_moon_extra_acceleration_is_nonzero():
     env.reset()
     ax, ay = env._extra_acceleration(env._rx, env._ry, env._vx, env._vy)
     assert abs(ax) + abs(ay) > 0.0
+
+
+def test_moon_autopilot_reaches_and_brakes_at_the_moon():
+    """The scripted pilot flies the full profile: hold, transfer, braking.
+
+    The rocket's delta-v budget is razor thin for this mission; the pilot
+    brakes to a slow near-touchdown a few km up but runs the tank dry, so a
+    soft landing is not asserted here (train_guided.py exists to close that
+    gap). What it must do: complete the orbit hold, cross to the moon, and
+    kill most of the ~2 km/s arrival speed close to the surface.
+    """
+    import math
+
+    from scripts.autopilot_demo import MoonAutopilot
+
+    env = ToMoonEnv()
+    obs, info = env.reset()
+    pilot = MoonAutopilot(env)
+    min_moon_d = math.inf
+    while True:
+        obs, _, terminated, truncated, info = env.step(pilot(info))
+        min_moon_d = min(min_moon_d, info["moon_distance"])
+        if terminated or truncated:
+            break
+    assert info["transfer"] is True  # orbit hold completed, phase 2 entered
+    assert min_moon_d < env.moon.radius + 80_000.0  # reached the moon
+    mvx, mvy = env._moon_velocity()
+    rel_speed = math.hypot(env._vx - mvx, env._vy - mvy)
+    assert rel_speed < 500.0  # braked from ~2.1 km/s arrival
+    assert info["moon_distance"] < env.moon.radius + 20_000.0  # ...down low

@@ -1,7 +1,8 @@
-"""Train PPO on TwoStageToOrbit with Stable-Baselines3.
+"""Train PPO on the orbital_gym missions with Stable-Baselines3.
 
     pip install -e ".[train]"
-    python scripts/train_ppo.py                          # 1M steps
+    python scripts/train_ppo.py                          # to-orbit, 1M steps
+    python scripts/train_ppo.py --mission return         # orbit-and-return
     python scripts/train_ppo.py --device mps            # force Apple GPU
     python scripts/train_ppo.py --out models/my_run      # named run
     python scripts/train_ppo.py --eval 5 --watch models/<run>.zip
@@ -33,18 +34,17 @@ except ImportError:
     raise SystemExit("stable-baselines3 not installed; run: pip install -e '.[train]'")
 
 from orbital_gym.missions.to_orbit import TwoStageToOrbitEnv
+from orbital_gym.missions.orbit_and_return import OrbitAndReturnEnv
+
+MISSIONS = {"orbit": TwoStageToOrbitEnv, "return": OrbitAndReturnEnv}
 
 GAMMA = 0.999  # long horizon: the duration reward arrives late
 
 
-def make_env():
-    return TwoStageToOrbitEnv()
-
-
-def evaluate(model_path: str, episodes: int, device: str) -> None:
-    env = make_env()
+def evaluate(model_path: str, episodes: int, device: str, mission: str) -> None:
+    env = MISSIONS[mission]()
     model = PPO.load(model_path, device=device)
-    holds = 0
+    successes = 0
     returns = []
     for ep in range(episodes):
         obs, info = env.reset()
@@ -56,22 +56,29 @@ def evaluate(model_path: str, episodes: int, device: str) -> None:
             space_s += env.step_duration if info["in_space"] else 0.0
             done = terminated or truncated
         returns.append(info["episode_return"])
-        held = info["termination"] == "time_limit" and info["orbit"]
-        holds += held
+        if mission == "return":
+            success = info["termination"] == "landed_on_pad"
+            extra = (f"touchdown {info['pad_downrange'] / 1000:7.2f} km from pad"
+                     f"{'  ON PAD' if success else ''}")
+        else:
+            success = info["termination"] == "time_limit" and info["orbit"]
+            extra = f"e {info['eccentricity']:5.3f}{'  HELD ORBIT' if success else ''}"
+        successes += success
         apo = info["apoapsis"]
         apo_s = "inf" if not math.isfinite(apo) else f"{apo / 1000:6.1f}"
-        print(f"ep {ep + 1:2d}: {info['termination']:<10} return {info['episode_return']:7.1f}  "
+        print(f"ep {ep + 1:2d}: {info['termination']:<14} return {info['episode_return']:7.1f}  "
               f"in space {space_s:5.0f} s  "
               f"final orbit {info['periapsis'] / 1000:6.1f} x {apo_s} km  "
-              f"e {info['eccentricity']:5.3f}  "
-              f"dv used {info['dv_used']:4.0f} m/s{'  HELD ORBIT' if held else ''}")
+              f"dv used {info['dv_used']:4.0f} m/s  {extra}")
     print("-" * 64)
-    print(f"held orbit to time limit {holds}/{episodes}  "
+    label = "landed on the pad" if mission == "return" else "held orbit to time limit"
+    print(f"{label} {successes}/{episodes}  "
           f"mean return {sum(returns) / len(returns):.1f}")
 
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--mission", default="orbit", choices=sorted(MISSIONS))
     ap.add_argument("--steps", type=int, default=1_000_000)
     ap.add_argument("--envs", type=int, default=8)
     ap.add_argument(
@@ -88,13 +95,13 @@ def main():
     if args.eval:
         if not (args.watch or args.out):
             raise SystemExit("--eval needs a model: --watch models/<run>.zip")
-        evaluate(args.watch or args.out, args.eval, args.device)
+        evaluate(args.watch or args.out, args.eval, args.device, args.mission)
         return
 
     if args.watch:
         import pygame
 
-        env = TwoStageToOrbitEnv(render_mode="human")
+        env = MISSIONS[args.mission](render_mode="human")
         model = PPO.load(args.watch, device=args.device)
         obs, info = env.reset()
         env.render()  # create the window before polling its events
@@ -116,7 +123,7 @@ def main():
     # (interpretable) units; only the rewards PPO sees are normalized. Obs are
     # already hand-normalized by the env.
     vec = VecNormalize(
-        VecMonitor(SubprocVecEnv([make_env for _ in range(args.envs)])),
+        VecMonitor(SubprocVecEnv([MISSIONS[args.mission] for _ in range(args.envs)])),
         norm_obs=False,
         norm_reward=True,
         gamma=GAMMA,
@@ -133,7 +140,7 @@ def main():
         seed=0,
         verbose=1,
     )
-    out = args.out or time.strftime("models/ppo_orbit_%Y%m%d_%H%M%S")
+    out = args.out or time.strftime(f"models/ppo_{args.mission}_%Y%m%d_%H%M%S")
     model.learn(total_timesteps=args.steps)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     model.save(out)
