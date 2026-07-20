@@ -107,6 +107,15 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         )
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
+        # The landing site is settable per-episode (goal-conditioned training
+        # randomizes it): options={"site_angle": rad} overrides the preset,
+        # otherwise the preset holds. Dynamics never depend on the site -- only
+        # the reward, the obs site channels, and the impact predictor do -- so
+        # randomizing it leaves the cached expert-action prefix exactly valid.
+        if options and "site_angle" in options:
+            self._site_angle = float(options["site_angle"])
+        elif not hasattr(self, "_site_angle"):
+            self._site_angle = self.moon.site_angle
         self._orbit_angle = 0.0
         self._transfer = False
         self._last_ang = math.pi / 2.0
@@ -114,6 +123,11 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         obs, info = super().reset(seed=seed, options=options)
         self._last_site_d = self._moon_site_distance()
         return obs, info
+
+    def set_site_angle(self, site_angle: float) -> None:
+        """Move the landing site (moon-body-frame angle, rad). Persists until
+        the next reset that overrides it. Dynamics are unaffected."""
+        self._site_angle = float(site_angle)
 
     # --- moon kinematics ------------------------------------------------------
 
@@ -135,7 +149,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
 
     def _moon_site_world(self) -> tuple[float, float]:
         mx, my = self._moon_world()
-        a = self._moon_angle() + self.moon.site_angle
+        a = self._moon_angle() + self._site_angle
         return (
             mx + self.moon.radius * math.cos(a),
             my + self.moon.radius * math.sin(a),
@@ -185,7 +199,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         mu, R = self.moon.mu, self.moon.radius
         r = math.hypot(px, py)
         theta_r = math.atan2(py, px)
-        site = self._moon_angle() + self.moon.site_angle
+        site = self._moon_angle() + self._site_angle
         if r <= R:
             return True, _wrap_pi(theta_r - site)
         h = px * wy - py * wx
@@ -303,7 +317,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         vt_m = (self._vx - mvx) * uy - (self._vy - mvy) * ux
         malt = max(0.0, d - self.moon.radius)
         pitch_m = _wrap_pi(self._theta - math.atan2(-ux, uy))
-        dsite = _wrap_pi(self._moon_angle() + self.moon.site_angle
+        dsite = _wrap_pi(self._moon_angle() + self._site_angle
                          - math.atan2(py, px))
 
         # Powered-landing instruments: the numbers a lander's guidance
@@ -360,6 +374,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         info["moon_radius"] = self.moon.radius
         info["moon_distance"] = self._moon_distance()
         info["moon_bearing"] = self._moon_bearing()
+        info["site_angle"] = self._site_angle
         info["moon_site_x"] = sx
         info["moon_site_y"] = sy
         info["moon_site_distance"] = self._moon_site_distance()
