@@ -7,10 +7,23 @@ there. Since fuel is finite, the only way to keep collecting the duration
 reward is to be moving sideways fast enough to orbit -- the reward function
 teaches the gravity turn by itself.
 
-Action space (Box, [-1, 1]):
-    a[0]  throttle command, mapped to [0, 1]
+Action space (Box, [-1, 1]), with attitude_control=True (the default):
+    a[0]     throttle command, mapped to [0, 1]
+    a[1:3]   desired thrust DIRECTION in the local frame (radial, tangential);
+             the env slews the attitude toward it at up to max_turn_rate. A
+             near-zero vector holds the current attitude.
+    a[3]     (only when auto_stage=False) fire staging when > 0
+
+Commanding a direction rather than a turn rate matters more than it looks.
+With a rate command the attitude is an open-loop integrator: a small, steady
+error accumulates until the thrust vector is badly misaligned, which turns a
+retro burn into an escape burn. A cloned or half-trained policy could hold a
+0.010-MSE fit to the expert and still fly the rocket away from the moon. As a
+direction, attitude is a set-point the env closes the loop on, so the same
+action error stays a small pointing error instead of compounding.
+
+Legacy rate control (attitude_control=False) keeps the old two-channel layout:
     a[1]  attitude turn-rate command, mapped to [-max_turn_rate, +max_turn_rate]
-    a[2]  (only when auto_stage=False) fire staging when > 0
 
 Observation (Box(9,), float32), all normalized:
     0  altitude / space_altitude
@@ -107,6 +120,7 @@ class TwoStageToOrbitEnv(gym.Env):
         crash_penalty: float = 100.0,
         crash_speed: float = 5.0,
         terminate_on_orbit: bool = False,
+        attitude_control: bool = True,
         render_mode: str | None = None,
     ):
         self.planet = PLANETS[planet] if isinstance(planet, str) else planet
@@ -127,10 +141,11 @@ class TwoStageToOrbitEnv(gym.Env):
         self.crash_penalty = crash_penalty
         self.crash_speed = crash_speed
         self.terminate_on_orbit = terminate_on_orbit
+        self.attitude_control = attitude_control
 
         self.v_ref = self.planet.circular_velocity(self.planet.space_altitude)
 
-        n_act = 2 if auto_stage else 3
+        n_act = (3 if attitude_control else 2) + (0 if auto_stage else 1)
         self.action_space = spaces.Box(-1.0, 1.0, shape=(n_act,), dtype=np.float32)
         self.observation_space = spaces.Box(-20.0, 20.0, shape=(self.OBS_SIZE,), dtype=np.float32)
 
@@ -148,6 +163,7 @@ class TwoStageToOrbitEnv(gym.Env):
         self._rx, self._ry = 0.0, p.radius
         self._vx, self._vy = 0.0, 0.0
         self._theta = math.pi / 2.0  # pointing straight up (local vertical)
+        self._target_theta = self._theta  # attitude set-point the env slews to
         self._stage = 0
         self._fuel = self.rocket.stages[0].prop_mass
         self._mass = self.rocket.launch_mass
@@ -166,14 +182,33 @@ class TwoStageToOrbitEnv(gym.Env):
         assert self._terminal is None, "step() called on a finished episode; call reset()"
         a = np.asarray(action, dtype=np.float64).flatten()
         throttle = float(np.clip((a[0] + 1.0) * 0.5, 0.0, 1.0))
-        turn_cmd = float(np.clip(a[1], -1.0, 1.0))
-        turn_rate = turn_cmd * self.rocket.max_turn_rate
-        if not self.auto_stage and len(a) > 2 and a[2] > 0.0:
+        max_rate = self.rocket.max_turn_rate
+        turn_rate = 0.0
+        if self.attitude_control:
+            # a[1:3] is the desired thrust direction in the local frame; the
+            # set-point is fixed in world axes for the whole step
+            ux, uy, tx, ty = self._local_frame()
+            dr, dt_cmd = float(a[1]), float(a[2])
+            wx = dr * ux + dt_cmd * tx
+            wy = dr * uy + dt_cmd * ty
+            self._target_theta = math.atan2(wy, wx) if math.hypot(wx, wy) > 1e-6 \
+                else self._theta
+            stage_channel = 3
+        else:
+            turn_cmd = float(np.clip(a[1], -1.0, 1.0))
+            turn_rate = turn_cmd * max_rate
+            stage_channel = 2
+        if not self.auto_stage and len(a) > stage_channel and a[stage_channel] > 0.0:
             self._next_stage()
 
+        theta_before = self._theta
         alt_before = self._altitude()
         space_time = 0.0
         for _ in range(self._substeps):
+            if self.attitude_control:
+                # slew toward the set-point, rate-limited, without overshoot
+                err = _wrap_pi(self._target_theta - self._theta)
+                turn_rate = max(-max_rate, min(max_rate, err / self.physics_dt))
             self._substep(throttle, turn_rate)
             if self._altitude() > self.planet.space_altitude:
                 space_time += self.physics_dt
@@ -187,7 +222,14 @@ class TwoStageToOrbitEnv(gym.Env):
         alt_after = self._altitude()
         cutoff = self.planet.space_altitude
         reward = self._step_reward(alt_before, alt_after, space_time)
-        reward -= self.turn_penalty * abs(turn_cmd) * self.step_duration
+        if self.attitude_control:
+            # cost the slew actually performed: same "whisper of control cost"
+            # as the rate command, but there is no rate to read off the action
+            slew = abs(_wrap_pi(self._theta - theta_before)) / \
+                max(1e-9, max_rate * self.step_duration)
+            reward -= self.turn_penalty * min(1.0, slew) * self.step_duration
+        else:
+            reward -= self.turn_penalty * abs(turn_cmd) * self.step_duration
 
         if self._terminal == "crashed":
             reward -= self.crash_penalty

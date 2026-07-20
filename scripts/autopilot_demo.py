@@ -96,6 +96,11 @@ class Autopilot:
 
     def _act(self, pitch: float, throttle: float, info: dict) -> np.ndarray:
         env = self.env
+        if env.attitude_control:
+            # pitch is elevation above the local horizon, so the desired
+            # direction is sin(pitch) radial + cos(pitch) tangential
+            return np.array([2.0 * throttle - 1.0, math.sin(pitch), math.cos(pitch)],
+                            dtype=np.float32)
         err = _wrap_pi(pitch - math.radians(info["pitch_deg"]))
         turn = np.clip(err / (env.rocket.max_turn_rate * env.step_duration), -1.0, 1.0)
         return np.array([2.0 * throttle - 1.0, turn], dtype=np.float32)
@@ -245,6 +250,12 @@ class MoonAutopilot:
         err = _wrap_pi(theta - e._theta)
         if gate is not None and abs(err) > gate:
             throttle = 0.0  # don't thrust mid-slew
+        if e.attitude_control:
+            # project the desired world direction onto the local frame
+            ux, uy, tx, ty = e._local_frame()
+            wx, wy = math.cos(theta), math.sin(theta)
+            return np.array([2.0 * throttle - 1.0, wx * ux + wy * uy, wx * tx + wy * ty],
+                            dtype=np.float32)
         turn = np.clip(err / (e.rocket.max_turn_rate * e.step_duration), -1.0, 1.0)
         return np.array([2.0 * throttle - 1.0, turn], dtype=np.float32)
 

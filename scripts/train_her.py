@@ -146,6 +146,8 @@ def landed_soft(info: dict) -> bool:
 
 SUCCESS_BONUS = 50.0
 FAILURE_PENALTY = 50.0
+CRASH_SPEED_REF = 500.0  # impact speed at which the crash penalty saturates
+CRASH_PENALTY_FLOOR = 0.1
 
 
 def goal_arc(achieved: np.ndarray, desired: np.ndarray,
@@ -193,8 +195,20 @@ def goal_reward(achieved: np.ndarray, desired: np.ndarray, infos: list,
     soft = np.array([bool(i.get("landed_soft", False)) for i in infos])
     # a terminal step is any step the env labeled; non-terminal steps have None
     ended = np.array([bool(i.get("termination")) for i in infos])
+    crashed = np.array([i.get("termination") == "crashed" for i in infos])
+    speed = np.array([float(i.get("moon_rel_speed", CRASH_SPEED_REF)) for i in infos])
+
+    # Grade the crash penalty by impact speed. A flat penalty makes a 430 m/s
+    # arrival and a 1560 m/s arrival score identically, so nothing pushes the
+    # policy toward touching down gently -- measured, impact speed drifted
+    # UPWARD during training under a flat penalty. Scaling it turns "land
+    # softer" into a gradient the critic can actually follow. Non-impact
+    # failures (escape, running out the window) take the full penalty.
+    scale = np.where(crashed,
+                     np.clip(speed / CRASH_SPEED_REF, CRASH_PENALTY_FLOOR, 1.0),
+                     1.0)
     reward = reward + SUCCESS_BONUS * (soft & (arc <= site_radius))
-    reward = reward - FAILURE_PENALTY * (ended & ~soft)
+    reward = reward - FAILURE_PENALTY * scale * (ended & ~soft)
     return reward.astype(np.float32)
 
 
@@ -228,6 +242,24 @@ class TD3BC(TD3):
     # the anchor meaningful early; once Q reaches its true scale (~50 here, the
     # terminal bonus) lambda falls to ~0.05 and the cap stops binding.
     bc_lambda_max = 1.0
+    demo_obs: dict | None = None
+    demo_act = None
+
+    def set_demos(self, obs_list: list[dict], act: list[np.ndarray]) -> None:
+        """Pin the BC anchor to the expert demonstrations.
+
+        Fujimoto's TD3+BC regresses toward the actions in the sampled replay
+        batch, which is correct OFFLINE where the buffer is a fixed good
+        dataset. Online it is a feedback loop: the buffer fills with the
+        current policy's own transitions, so a degrading actor is anchored to
+        its own degradation. Measured, the policy collapsed the same way under
+        every bc_alpha because the anchor was drifting with it. Regressing
+        against the demonstrations instead keeps the reference fixed.
+        """
+        dev = self.device
+        self.demo_obs = {k: th.as_tensor(np.stack([o[k] for o in obs_list]), device=dev)
+                         for k in obs_list[0]}
+        self.demo_act = th.as_tensor(np.clip(np.stack(act), -0.999, 0.999), device=dev)
 
     def warmup_critic(self, gradient_steps: int, batch_size: int = 512) -> None:
         """Fit the critic on the seeded buffer before the actor may move.
@@ -302,7 +334,14 @@ class TD3BC(TD3):
                 q_pi = self.critic.q1_forward(replay_data.observations, pi)
                 lmbda = th.clamp(self.bc_alpha / q_pi.abs().mean().detach(),
                                  max=self.bc_lambda_max)
-                bc_loss = F.mse_loss(pi, replay_data.actions)
+                if self.demo_act is not None:
+                    idx = th.randint(0, len(self.demo_act), (batch_size,),
+                                     device=self.device)
+                    bc_loss = F.mse_loss(
+                        self.actor({k: v[idx] for k, v in self.demo_obs.items()}),
+                        self.demo_act[idx])
+                else:
+                    bc_loss = F.mse_loss(pi, replay_data.actions)
                 actor_loss = -lmbda * q_pi.mean() + bc_loss
                 actor_losses.append(actor_loss.item())
                 bc_losses.append(bc_loss.item())
@@ -712,6 +751,7 @@ def main():
         return Monitor(GoalMoonEnv(actions, args.handoff, center, arc,
                                    args.max_steps, site_radius=site_radius))
     vec = DummyVecEnv([_thunk])
+    n_act = int(vec.action_space.shape[0])
 
     print("[3/5] building TD3 + HER (goal-conditioned, hindsight relabeling)")
     model = TD3BC(
@@ -723,7 +763,8 @@ def main():
             goal_selection_strategy="future",
             copy_info_dict=True,  # REQUIRED: the landed_soft gate lives in info
         ),
-        action_noise=NormalActionNoise(np.zeros(2), args.explore_noise * np.ones(2)),
+        action_noise=NormalActionNoise(np.zeros(n_act),
+                                       args.explore_noise * np.ones(n_act)),
         learning_rate=args.lr,
         gamma=args.gamma,
         batch_size=args.batch_size,
@@ -749,6 +790,7 @@ def main():
 
     print(f"[4/5] behavior cloning the actor, {args.bc_epochs} epochs")
     bc_pretrain(model, bc_obs, bc_act, args.bc_epochs, lr=args.bc_lr)
+    model.set_demos(bc_obs, bc_act)  # keep the anchor on the demos, not the buffer
     print("      BC policy, flown solo on random goals:")
     evaluate(None, 5, args.device, args.handoff, center, arc, args.max_steps,
              site_radius, actions, model=model)

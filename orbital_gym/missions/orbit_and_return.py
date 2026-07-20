@@ -74,6 +74,7 @@ class OrbitAndReturnEnv(TwoStageToOrbitEnv):
         land_bonus: float = 300.0,
         land_decay: float = 10_000.0,
         pad_radius: float = 500.0,
+        attitude_control: bool = True,
         render_mode: str | None = None,
     ):
         # Mission state used by reset()/_obs(), which run inside super().__init__.
@@ -97,6 +98,7 @@ class OrbitAndReturnEnv(TwoStageToOrbitEnv):
             crash_penalty=crash_penalty,
             crash_speed=crash_speed,
             terminate_on_orbit=False,
+            attitude_control=attitude_control,
             render_mode=render_mode,
         )
         self._d_scale = 2.0 * self.planet.radius

@@ -4,8 +4,8 @@ import gymnasium as gym
 
 from orbital_gym.missions.to_moon import ToMoonEnv
 
-IDLE = np.array([-1.0, 0.0], dtype=np.float32)  # throttle 0, no turn
-SPIN = np.array([-1.0, 1.0], dtype=np.float32)  # throttle 0, full turn
+IDLE = np.array([-1.0, 0.0, 0.0], dtype=np.float32)  # throttle 0, hold attitude
+SPIN = np.array([-1.0, 0.0, 1.0], dtype=np.float32)  # throttle 0, point at horizon
 
 
 def test_registered_id_and_obs_size():
@@ -33,10 +33,10 @@ def test_turn_penalty_is_inherited():
     env = ToMoonEnv()
     env.reset()
     total = 0.0
-    for _ in range(20):
+    for _ in range(5):  # 5 steps of full-rate slew toward the horizon
         _, r, *_ = env.step(SPIN)
         total += r
-    assert total == pytest.approx(-20.0 * env.turn_penalty * env.step_duration, rel=1e-6)
+    assert total == pytest.approx(-5.0 * env.turn_penalty * env.step_duration, rel=1e-6)
 
 
 def test_orbit_progress_requires_stable_orbit():

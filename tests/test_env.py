@@ -9,8 +9,8 @@ import orbital_gym
 from orbital_gym.presets import G0, PLANETS, ROCKETS, stage_delta_v, total_delta_v
 from orbital_gym.missions.to_orbit import TwoStageToOrbitEnv
 
-IDLE = np.array([-1.0, 0.0], dtype=np.float32)   # throttle 0, no turn
-BURN = np.array([1.0, 0.0], dtype=np.float32)    # full throttle, hold attitude
+IDLE = np.array([-1.0, 0.0, 0.0], dtype=np.float32)   # throttle 0, hold attitude
+BURN = np.array([1.0, 0.0, 0.0], dtype=np.float32)    # full throttle, hold attitude
 
 
 def test_gymnasium_api_conformance():
@@ -138,12 +138,14 @@ def test_circularity_reward_pays_for_round_orbits_only():
 def test_turn_penalty_discourages_spinning():
     env = TwoStageToOrbitEnv()
     env.reset()
-    spin = np.array([-1.0, 1.0], dtype=np.float32)  # throttle 0, full turn
+    # point at the local horizon: 90 deg off the pad attitude, so the env
+    # slews at the full 15 deg/s rate for each of the first 5 steps
+    spin = np.array([-1.0, 0.0, 1.0], dtype=np.float32)
     total = 0.0
-    for _ in range(20):
+    for _ in range(5):
         _, r, *_ = env.step(spin)
         total += r
-    assert total == pytest.approx(-20.0 * env.turn_penalty * env.step_duration, rel=1e-6)
+    assert total == pytest.approx(-5.0 * env.turn_penalty * env.step_duration, rel=1e-6)
 
 
 def test_crash_penalty_and_termination():
