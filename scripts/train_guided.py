@@ -21,6 +21,7 @@ the autopilot's skills and only has to find the last ~100 m/s of efficiency.
 
     pip install -e ".[train]"
     python scripts/train_guided.py --mission orbit|return|moon   # 1M steps
+    python scripts/train_guided.py --mission moon --resume models/<run>.zip
     python scripts/train_guided.py --mission moon --eval 5 --watch models/<run>.zip
 """
 
@@ -30,6 +31,9 @@ import argparse
 import copy
 import math
 import os
+import subprocess
+import sys
+import tempfile
 import time
 
 import numpy as np
@@ -144,6 +148,127 @@ def make_env(mission: str, actions: list[np.ndarray],
     return _thunk
 
 
+class LiveProgress(BaseCallback):
+    """Something to watch while it trains.
+
+    Every plot_every steps, print an ASCII graph of mean episode return
+    over training so far. Every probe_every steps, fly one deterministic
+    episode with the current policy (autopilot prefix included) and print
+    how it went; when it beats the best return so far, replay it in the
+    pygame window -- in a separate process, so training keeps running
+    while you watch. The env is deterministic, so the recorded actions
+    are the whole flight; the prefix is fast-forwarded invisibly and what
+    you watch is the part the policy flies.
+    """
+
+    def __init__(self, mission: str, actions: list[np.ndarray], handoff: float,
+                 plot_every: int = 20_000, probe_every: int = 50_000,
+                 render: bool = True):
+        super().__init__()
+        self.mission = mission
+        self._actions = actions
+        self._n_pre = int(handoff * len(actions))
+        self.plot_every = plot_every
+        self.probe_every = probe_every
+        self.render = render
+        self._returns: list[tuple[int, float]] = []
+        self._best = -math.inf
+        self._next_plot = plot_every
+        self._next_probe = probe_every
+        self._probe_env = None
+        self._proc = None  # the detached replay-window process
+
+    def _on_step(self) -> bool:
+        for info in self.locals["infos"]:
+            ep = info.get("episode")
+            if ep is not None:
+                self._returns.append((self.num_timesteps, float(ep["r"])))
+        if self.plot_every and self.num_timesteps >= self._next_plot:
+            self._next_plot += self.plot_every
+            self._plot()
+        if self.probe_every and self.num_timesteps >= self._next_probe:
+            self._next_probe += self.probe_every
+            self._probe()
+        return True
+
+    def _plot(self, width: int = 60, height: int = 10) -> None:
+        if len(self._returns) < 2:
+            return
+        t_max = self._returns[-1][0]
+        sums = np.zeros(width)
+        counts = np.zeros(width)
+        for t, r in self._returns:
+            c = min(width - 1, int(t / t_max * width))
+            sums[c] += r
+            counts[c] += 1
+        cols = np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
+        filled = cols[~np.isnan(cols)]
+        lo, hi = float(filled.min()), float(filled.max())
+        span = max(1e-9, hi - lo)
+        print(f"\n  episode return over training  "
+              f"(mean of last 20: {np.mean([r for _, r in self._returns[-20:]]):.0f}, "
+              f"best probe: {self._best if self._best > -1e9 else float('nan'):.0f})")
+        for row in range(height, 0, -1):
+            label = f"{lo + span * row / height:8.0f} |" if row in (height, 1) \
+                else "         |"
+            line = "".join(
+                " " if np.isnan(c) else
+                ("█" if (c - lo) / span * height >= row - 0.5 else " ")
+                for c in cols)
+            print(f"  {label}{line}")
+        print(f"          +{'-' * width}\n"
+              f"           0 steps{' ' * (width - 18)}{t_max:,}\n")
+
+    def _probe(self) -> None:
+        if self._probe_env is None:
+            self._probe_env = MISSIONS[self.mission][0]()
+        ret, info, acts = self._fly(self._probe_env)
+        line = f"  [probe @ {self.num_timesteps:>9,}] end={info['termination']:<16} return={ret:7.1f}"
+        if self.mission == "moon":
+            env = self._probe_env
+            line += (f"  moon alt {(info['moon_distance'] - env.moon.radius) / 1000:7.1f} km"
+                     f"  rel {info['moon_rel_speed']:5.0f} m/s")
+        if ret > self._best:
+            self._best = ret
+            line += "  NEW BEST"
+            print(line)
+            if self.render:
+                print("  replaying it in a window; training continues...")
+                self._spawn_replay(acts)
+        else:
+            print(line)
+
+    def _fly(self, env):
+        obs, info = env.reset()
+        acts = []
+        done = False
+        for i in range(self._n_pre):
+            acts.append(self._actions[i])
+            obs, _, term, trunc, info = env.step(self._actions[i])
+            done = term or trunc
+            if done:
+                break
+        while not done:
+            action, _ = self.model.predict(obs, deterministic=True)
+            acts.append(action)
+            obs, _, term, trunc, info = env.step(action)
+            done = term or trunc
+        return info["episode_return"], info, acts
+
+    def _spawn_replay(self, acts: list[np.ndarray]) -> None:
+        """Replay the flight in a detached process so training never waits
+        for the window. A newer best supersedes a still-open window."""
+        path = os.path.join(tempfile.gettempdir(),
+                            f"guided_replay_{os.getpid()}_{self.num_timesteps}.npz")
+        np.savez(path, actions=np.stack(acts), n_pre=self._n_pre,
+                 mission=self.mission)
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.terminate()
+        self._proc = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--replay", path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 class AnnealPrefix(BaseCallback):
     """Linearly anneal the max jump-start prefix down to the window floor
     over `frac` of training."""
@@ -233,6 +358,38 @@ def rollout_check(model: PPO, mission: str) -> None:
     env.close()
 
 
+def replay(path: str) -> None:
+    """Play back a recorded flight in the pygame window. Spawned as its own
+    process by LiveProgress so training never blocks on the replay; the
+    autopilot prefix is stepped with rendering off, then the window opens
+    at the handoff and the policy's part plays in real time."""
+    import pygame
+
+    data = np.load(path)
+    actions, n_pre, mission = data["actions"], int(data["n_pre"]), str(data["mission"])
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    env = MISSIONS[mission][0]()
+    env.reset()
+    for i in range(n_pre):
+        _, _, term, trunc, _ = env.step(actions[i])
+        if term or trunc:
+            env.close()
+            return
+    env.render_mode = "human"
+    for a in actions[n_pre:]:
+        _, _, term, trunc, _ = env.step(a)
+        if term or trunc or pygame.event.peek(pygame.QUIT):
+            break
+    for _ in range(120):  # hold the outcome banner ~4 s, then close
+        if pygame.event.peek(pygame.QUIT):
+            break
+        env.render()
+    env.close()
+
+
 def evaluate(model_path: str, episodes: int, device: str, mission: str,
              handoff: float = 0.0) -> None:
     """Roll the policy; with handoff > 0, the autopilot flies that fraction
@@ -304,11 +461,27 @@ def main():
                          "fraction of training")
     ap.add_argument("--lr", type=float, default=1e-4,
                     help="PPO learning rate (kept low to protect the BC init)")
+    ap.add_argument("--plot-every", type=int, default=20_000,
+                    help="print the reward-over-training graph every N steps (0=off)")
+    ap.add_argument("--probe-every", type=int, default=50_000,
+                    help="test-fly the current policy every N steps (0=off)")
+    ap.add_argument("--no-render", action="store_true",
+                    help="don't open the window that replays new best flights")
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--resume", default=None, metavar="MODEL.zip",
+                    help="continue training an existing model for --steps more "
+                         "steps (skips demos and behavior cloning; restores "
+                         "reward-normalization stats from MODEL_vecnorm.pkl "
+                         "when present)")
     ap.add_argument("--out", default=None)
     ap.add_argument("--eval", type=int, default=0)
     ap.add_argument("--watch", default=None)
+    # internal: replay a flight recorded by LiveProgress (own process)
+    ap.add_argument("--replay", default=None, help=argparse.SUPPRESS)
     args = ap.parse_args()
+    if args.replay:
+        replay(args.replay)
+        return
     if args.prefix is None:
         args.prefix = 0.97 if args.mission == "moon" else 0.85
     if args.prefix_min is None:
@@ -352,49 +525,79 @@ def main():
         env.close()
         return
 
-    print(f"[1/3] collecting {args.demos} demo episodes ({args.mission})")
-    demo_obs, demo_act = collect_demos(args.mission, args.demos, args.noise)
-    print(f"      {len(demo_obs)} state-action pairs")
+    if args.resume:
+        if not args.resume.endswith(".zip"):
+            args.resume += ".zip"
+        if not os.path.exists(args.resume):
+            raise SystemExit(f"--resume: no such model: {args.resume}")
+        print(f"[1/3] resuming from {args.resume} -- skipping demos and BC")
+    else:
+        print(f"[1/3] collecting {args.demos} demo episodes ({args.mission})")
+        demo_obs, demo_act = collect_demos(args.mission, args.demos, args.noise)
+        print(f"      {len(demo_obs)} state-action pairs")
 
     print("[2/3] caching the expert episode for jump-starts")
     actions = expert_actions(args.mission)
     print(f"      expert episode: {len(actions)} steps")
 
-    vec = VecNormalize(
-        VecMonitor(SubprocVecEnv(
-            [make_env(args.mission, actions, args.prefix_min, args.prefix)
-             for _ in range(args.envs)])),
-        norm_obs=False,
-        norm_reward=True,
-        gamma=GAMMA,
-    )
-    model = PPO(
-        "MlpPolicy",
-        vec,
-        learning_rate=args.lr,
-        n_steps=2048,
-        batch_size=256,
-        gamma=GAMMA,
-        gae_lambda=0.98,
-        device=args.device,
-        seed=0,
-        verbose=1,
-    )
-    print(f"[2/3] behavior cloning, {args.bc_epochs} epochs")
-    bc_pretrain(model, demo_obs, demo_act, args.bc_epochs)
-    rollout_check(model, args.mission)
+    inner = VecMonitor(SubprocVecEnv(
+        [make_env(args.mission, actions, args.prefix_min, args.prefix)
+         for _ in range(args.envs)]))
+    # The value function is trained against VecNormalize's running reward
+    # scale, so a resumed run must restore the stats saved with the model.
+    stats = args.resume[:-4] + "_vecnorm.pkl" if args.resume else None
+    if stats and os.path.exists(stats):
+        vec = VecNormalize.load(stats, inner)
+        vec.training = True
+        print(f"      restored reward-normalization stats from {stats}")
+    else:
+        vec = VecNormalize(inner, norm_obs=False, norm_reward=True, gamma=GAMMA)
+        if args.resume:
+            print("      no saved reward-normalization stats found; "
+                  "starting them fresh (value estimates settle in ~50k steps)")
+
+    if args.resume:
+        model = PPO.load(args.resume, env=vec, device=args.device,
+                         learning_rate=args.lr,
+                         verbose=0 if args.plot_every else 1)
+        print(f"      model had {model.num_timesteps:,} training steps; "
+              f"training {args.steps:,} more")
+    else:
+        model = PPO(
+            "MlpPolicy",
+            vec,
+            learning_rate=args.lr,
+            n_steps=2048,
+            batch_size=256,
+            gamma=GAMMA,
+            gae_lambda=0.98,
+            device=args.device,
+            seed=0,
+            verbose=0 if args.plot_every else 1,
+        )
+        print(f"[2/3] behavior cloning, {args.bc_epochs} epochs")
+        bc_pretrain(model, demo_obs, demo_act, args.bc_epochs)
+        rollout_check(model, args.mission)
 
     print(f"[3/3] jump-start PPO, {args.steps} steps, "
           f"prefix {args.prefix} -> {args.prefix_min} over {args.anneal:.0%}")
     out = args.out or time.strftime(f"models/guided_{args.mission}_%Y%m%d_%H%M%S")
-    model.learn(total_timesteps=args.steps,
-                callback=AnnealPrefix(args.prefix, args.prefix_min,
-                                      args.anneal, args.steps))
+    callbacks = [AnnealPrefix(args.prefix, args.prefix_min, args.anneal, args.steps)]
+    if args.plot_every or args.probe_every:
+        callbacks.append(LiveProgress(
+            args.mission, actions, handoff=args.prefix_min,
+            plot_every=args.plot_every, probe_every=args.probe_every,
+            render=not args.no_render))
+    model.learn(total_timesteps=args.steps, callback=callbacks)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     model.save(out)
+    vec.save((out[:-4] if out.endswith(".zip") else out) + "_vecnorm.pkl")
     print(f"saved {out}.zip -- evaluate with:\n"
           f"  python scripts/train_guided.py --mission {args.mission} "
-          f"--eval 5 --watch {out}.zip")
+          f"--eval 5 --watch {out}.zip\n"
+          f"train it further with:\n"
+          f"  python scripts/train_guided.py --mission {args.mission} "
+          f"--resume {out}.zip")
 
 
 if __name__ == "__main__":

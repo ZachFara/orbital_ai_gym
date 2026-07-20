@@ -95,8 +95,18 @@ class Renderer:
         ]
         self._span = None   # smoothed view half-width, m
         self._blend = 0.0   # smoothed rocket-view -> map-view factor
+        self._fblend = 0.0  # smoothed planet-focus -> moon-focus factor
 
     # --- camera ---------------------------------------------------------------
+
+    def _soi(self):
+        """The body whose sphere of influence the rocket is in:
+        ("planet"|"moon", center_x, center_y, mu, body_radius)."""
+        env = self.env
+        if hasattr(env, "moon_soi") and env._in_moon_soi():
+            mx, my = env._moon_world()
+            return "moon", mx, my, env.moon.mu, env.moon.radius
+        return "planet", 0.0, 0.0, env.planet.mu, env.planet.radius
 
     def _camera(self):
         env = self.env
@@ -117,21 +127,40 @@ class Renderer:
         span_rocket = max(1500.0, 900.0 + 1.9 * alt)
         span_map = 1.15 * (p.radius + max(apo_eff, c))
 
-        rn = math.hypot(env._rx, env._ry)
+        # KSP-style: inside the moon's SOI the map view re-centers on the
+        # moon and the span shrinks to moon scale. The focus factor is
+        # smoothed so crossing the boundary glides instead of jumping;
+        # at 1 the focus tracks the (moving) moon exactly, lag-free.
+        soi, sx, sy, _, soi_body_r = self._soi()
+        mx, my = env._moon_world() if hasattr(env, "moon_soi") else (0.0, 0.0)
+        if soi == "moon":
+            blend_t = 1.0
+            d = math.hypot(env._rx - mx, env._ry - my)
+            span_map = 1.15 * (soi_body_r + max(d - soi_body_r, 0.35 * soi_body_r))
+        want_f = 1.0 if soi == "moon" else 0.0
         if self._span is None:
-            self._span, self._blend = span_rocket, blend_t
+            self._fblend = want_f  # first frame ever: start converged
+        else:
+            self._fblend += (want_f - self._fblend) * 0.06
+        fx, fy = self._fblend * mx, self._fblend * my
+
+        rn = math.hypot(env._rx, env._ry)
+        d_focus = math.hypot(env._rx - fx, env._ry - fy)
+        if self._span is None:
+            self._span = _lerp(span_rocket, span_map, blend_t)
+            self._blend = blend_t
         else:
             self._blend += (blend_t - self._blend) * 0.08
             span_t = _lerp(span_rocket, span_map, self._blend)
             # never let the blend geometry push the rocket off-screen
-            span_t = max(span_t, 1.9 * self._blend * rn)
+            span_t = max(span_t, 1.9 * self._blend * d_focus)
             self._span += (span_t - self._span) * 0.12
 
         m = self._blend
         ux, uy = env._rx / rn, env._ry / rn
         bias = 0.18 * self._span * (1.0 - m)
-        cx = _lerp(env._rx + ux * bias, 0.0, m)
-        cy = _lerp(env._ry + uy * bias, 0.0, m)
+        cx = _lerp(env._rx + ux * bias, fx, m)
+        cy = _lerp(env._ry + uy * bias, fy, m)
         return cx, cy, (W / 2) / self._span
 
     def _to_screen(self, x, y, cam):
@@ -258,32 +287,76 @@ class Renderer:
     # --- trajectory -------------------------------------------------------------
 
     def _orbit_path(self):
+        """Trajectory conic in the frame of the SOI body, KSP-style: near
+        the moon it is moon-relative and drawn around the moon. Bound,
+        reasonably-round orbits draw as the full ellipse; hyperbolic and
+        near-parabolic paths draw as the arc ahead of the rocket -- an
+        arriving lander is hyperbolic relative to the moon right up to the
+        capture burn, and it should still see where it is headed."""
         env = self.env
-        p = env.planet
-        rx, ry, vx, vy = env._rx, env._ry, env._vx, env._vy
+        soi, bx, by, mu, body_r = self._soi()
+        rx, ry = env._rx - bx, env._ry - by
+        if soi == "moon":
+            mvx, mvy = env._moon_velocity()
+            vx, vy = env._vx - mvx, env._vy - mvy
+            min_apo = 0.05 * body_r  # any bound moon orbit is interesting
+            r_lim = env.moon_soi
+        else:
+            vx, vy = env._vx, env._vy
+            min_apo = 0.3 * env.planet.space_altitude
+            r_lim = 3.2 * env.planet.radius
         r = math.hypot(rx, ry)
         v2 = vx * vx + vy * vy
-        energy = 0.5 * v2 - p.mu / r
-        if energy >= 0.0:
-            return None
+        energy = 0.5 * v2 - mu / r
         rv = rx * vx + ry * vy
-        ex = ((v2 - p.mu / r) * rx - rv * vx) / p.mu
-        ey = ((v2 - p.mu / r) * ry - rv * vy) / p.mu
+        ex = ((v2 - mu / r) * rx - rv * vx) / mu
+        ey = ((v2 - mu / r) * ry - rv * vy) / mu
         e = math.hypot(ex, ey)
-        if e > 0.985:
-            return None
-        a = -p.mu / (2.0 * energy)
-        if a * (1.0 + e) - p.radius < 0.3 * p.space_altitude:
-            return None  # too small to be interesting yet
         w = math.atan2(ey, ex)
+        h = rx * vy - ry * vx
+        p_semi = h * h / mu
+        peri_alt = p_semi / (1.0 + e) - body_r if e > 1e-9 else r - body_r
+        pe = (bx + (peri_alt + body_r) * math.cos(w),
+              by + (peri_alt + body_r) * math.sin(w))
+
+        if energy < 0.0 and e <= 0.985:
+            a = -mu / (2.0 * energy)
+            if a * (1.0 + e) - body_r < min_apo:
+                return None  # too small to be interesting yet
+            pts = []
+            for k in range(97):
+                nu = 2.0 * math.pi * k / 96
+                rr = a * (1.0 - e * e) / (1.0 + e * math.cos(nu))
+                pts.append((bx + rr * math.cos(w + nu), by + rr * math.sin(w + nu)))
+            return pts, pe, pts[48], peri_alt, a * (1.0 + e) - body_r
+
+        # open conic: sample true anomaly from the rocket forward until the
+        # path leaves the SOI (or the map). The world angle is w + sgn*nu,
+        # sgn from the angular momentum -- these missions fly westward.
+        if e < 1e-9:
+            return None
+        sgn = 1.0 if h >= 0.0 else -1.0
+        nu0 = math.acos(max(-1.0, min(1.0, (p_semi / r - 1.0) / e)))
+        if rv < 0.0:
+            nu0 = -nu0
+        nu_lim = math.acos(max(-1.0, min(1.0, (p_semi / r_lim - 1.0) / e)))
+        if e > 1.0:
+            nu_lim = min(nu_lim, math.acos(-1.0 / e) - 0.02)
+        if nu_lim <= nu0:
+            return None
         pts = []
-        for k in range(97):
-            nu = 2.0 * math.pi * k / 96
-            rr = a * (1.0 - e * e) / (1.0 + e * math.cos(nu))
-            pts.append((rr * math.cos(w + nu), rr * math.sin(w + nu)))
-        pe = pts[0]
-        ap = pts[48]
-        return pts, pe, ap, a * (1.0 - e) - p.radius, a * (1.0 + e) - p.radius
+        for k in range(129):
+            nu = nu0 + (nu_lim - nu0) * k / 128
+            rr = p_semi / (1.0 + e * math.cos(nu))
+            if rr < 0.0 or rr > 1.05 * r_lim:
+                break
+            pts.append((bx + rr * math.cos(w + sgn * nu),
+                        by + rr * math.sin(w + sgn * nu)))
+            if rr < body_r:
+                break  # ends at the surface: no ghost path out the far side
+        if len(pts) < 2:
+            return None
+        return pts, pe, (0.0, 0.0), peri_alt, -1.0
 
     def _draw_orbit(self, cam):
         path = self._orbit_path()
@@ -331,6 +404,9 @@ class Renderer:
             r_px = max(3.0, mr * cam[2])
             self.pg.draw.circle(self.surf, MOON, center, r_px)
             self.pg.draw.circle(self.surf, MOON_SHADE, center, r_px, width=2)
+            soi_px = getattr(env, "moon_soi", 0.0) * cam[2]
+            if 1.4 * r_px < soi_px < 2500:
+                self.pg.draw.circle(self.surf, SPACE_LINE, center, soi_px, width=1)
             site = self._to_screen(sx, sy, cam)
             if self._on_screen(site, margin=100):
                 self.pg.draw.circle(self.surf, MOON_SITE, site, 4)
@@ -417,9 +493,14 @@ class Renderer:
 
         panel = self._panel(258, 168)
         self.surf.blit(panel, (10, 10))
-        alt_km = info["altitude"] / 1000
+        # inside the moon's SOI the headline numbers go moon-relative,
+        # matching the frame the info elements switched to
+        in_moon = info.get("soi") == "moon"
+        alt_km = ((info["moon_distance"] - info["moon_radius"]) if in_moon
+                  else info["altitude"]) / 1000
+        speed = info["moon_rel_speed"] if in_moon else info["speed"]
         self.surf.blit(self.font_big.render(f"{alt_km:8.1f} km", True, TEXT), (24, 20))
-        self.surf.blit(self.font_big.render(f"{info['speed']:6.0f} m/s", True, TEXT), (24, 52))
+        self.surf.blit(self.font_big.render(f"{speed:6.0f} m/s", True, TEXT), (24, 52))
         apo = info["apoapsis"]
         apo_s = "--" if not math.isfinite(apo) else f"{apo / 1000:.1f}"
         peri_s = "--" if info["periapsis"] < 0 else f"{info['periapsis'] / 1000:.1f}"
@@ -456,7 +537,9 @@ class Renderer:
 
         # status badge
         badge_text = None
-        if env._terminal is None and info.get("returning"):
+        if env._terminal is None and in_moon:
+            badge_text = "MOON SOI", ACCENT
+        elif env._terminal is None and info.get("returning"):
             badge_text = f"RETURN   {info['pad_downrange'] / 1000:.0f} km to pad", ACCENT
         elif env._terminal is None and info["in_space"]:
             if info["orbit"]:
@@ -479,6 +562,8 @@ class Renderer:
                 "crashed": ("CRASHED", BAD),
                 "landed": ("LANDED", TEXT),
                 "landed_on_pad": ("LANDED ON THE PAD", GOOD),
+                "landed_moon": ("LANDED ON THE MOON", GOOD),
+                "landed_moon_site": ("LANDED ON THE SITE", GOOD),
                 "escaped": ("ESCAPED THE PLANET", ORBIT_PATH),
                 "orbit": ("STABLE ORBIT", GOOD),
                 "time_limit": ("TIME'S UP", TEXT),

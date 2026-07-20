@@ -43,10 +43,24 @@ the return mission (when they didn't, a trained policy proved that
 loitering to the time limit strictly beat landing). Touching down at under
 25 m/s relative speed pays +500 within 8 km of the site
 (`landed_moon_site`), +250 anywhere else on the moon (`landed_moon`);
-anything harder is a crash. One important quirk: the easy moon orbits
-counterclockwise at 2.1 km/s — 73% faster than a Kepler orbit at its
-radius — so missions must fly **westward** to chase it, and the delta-v
-budget is razor thin (see below).
+anything harder is a crash. The moon's on-rails period is **Keplerian**
+for its orbit radius — this matters more than it sounds: rails at any
+other speed make the moon-relative frame non-inertial, and a lander
+fights a phantom `v²/r − μ/r²` force the whole way down (an earlier
+arbitrary period put 1.2 m/s², 14% of moon surface gravity, under every
+landing). The moon orbits counterclockwise, so missions fly **westward**
+to arrive co-rotating instead of meeting it head-on at ~2 km/s.
+
+The moon has a KSP-style **sphere of influence** (the Laplace radius,
+~820 km for the easy pair). Inside it, `info`'s periapsis / apoapsis /
+eccentricity switch to moon-relative values, and the escape guard is
+suspended — planet-centric elements say nothing about where a rocket
+deep in the moon's gravity is actually headed (on a fast-railed moon a
+braking lander is outright planet-hyperbolic, and the guard used to call
+it "escaped" seconds before touchdown the moment its tank ran dry). The
+renderer follows suit: in the moon's SOI the map view re-centers on the
+moon, the trajectory ellipse is drawn around it, and the HUD's altitude
+and speed go moon-relative.
 
 **OrbitAndReturn** is the boomerang mission, in two phases with an
 irreversible switch:
@@ -100,16 +114,16 @@ python scripts/autopilot_demo.py --mission return   # ...and back: deorbit burn,
                                                     # reentry, landing burn onto the pad
 python scripts/autopilot_demo.py --mission moon --render   # westward ascent, hold,
                                                     # trans-lunar injection, retro
-                                                    # braking to a near-landing
+                                                    # braking to a soft landing
 python scripts/autopilot_demo.py --planet earth     # hard mode, ~11 km/s
 ```
 
 The moon autopilot flies the whole profile — leaner westward ascent
-(~4.07 km/s), Kepler-solved injection timing, midcourse coast, and a
-retrograde suicide burn that kills the ~2.1 km/s arrival — but the rocket's
-budget is ~100 m/s short of a soft touchdown: it runs the tank dry a few km
-above the surface at a few hundred m/s. That last gap is deliberately left
-to learning (below).
+(~4.07 km/s), Kepler-solved injection timing, midcourse coast, a
+retrograde suicide burn that kills the ~1.8 km/s arrival, and a
+boundary-riding vertical descent to a touchdown at the profile's ~8 m/s
+floor, with ~3.4 km/s to spare. It lands ~287 km from the site: putting
+the landing *on* the site is deliberately left to learning (below).
 
 Fly it yourself (arrows steer, space toggles throttle, `s` stages, 1/2/3 time warp):
 
@@ -136,6 +150,7 @@ and the only sane way to learn the moon mission):
 
 ```bash
 python scripts/train_guided.py --mission moon          # or orbit / return
+python scripts/train_guided.py --mission moon --resume models/<run>.zip
 python scripts/train_guided.py --mission moon --eval 5 --watch models/<run>.zip
 ```
 
@@ -146,7 +161,15 @@ jump-start curriculum — every episode begins with the autopilot flying a
 random prefix of the mission before the policy takes over, and the maximum
 prefix anneals to zero, so the policy masters the landing before the
 launch. On the moon mission the policy starts from an expert that already
-does everything but the final touchdown.
+soft-lands — a couple hundred km off target: reaching the site (and flying
+it cheaper) is what's left to learn.
+
+`--resume models/<run>.zip` keeps training an existing model for `--steps`
+more steps, skipping the demo and cloning stages. Each run saves its
+reward-normalization statistics next to the model
+(`<run>_vecnorm.pkl`) so the resumed value function sees the same reward
+scale it trained on; older checkpoints without the file resume fine, the
+stats just re-warm.
 
 ## Spaces
 
@@ -170,6 +193,20 @@ periapsis, eccentricity, dynamic pressure, `dv_used`, `dv_remaining`,
 mission, `pad_bearing`, `pad_distance`, `pad_downrange`, `orbit_progress`,
 and `returning`.
 
+`ToMoon-v0`'s observation is `(30,)`: the base 9, six moon/site bearings
+and distances, and — because the landing is flown relative to a moving
+moon — a panel of moon-local instruments: log-scaled and last-20-km moon
+altitude, moon-relative sink rate and ground speed, attitude above the
+moon's local horizon, the site's angle around the moon, the delta-v
+fraction remaining, and the readouts a lander's guidance computer would
+show — the throttle that hovers, the suicide-burn margin (deceleration
+needed to stop at the surface vs. available headroom), log time-to-surface,
+and an **impact predictor**: whether the coasting trajectory hits the
+moon, plus sin/cos of the angle from the predicted touchdown point to the
+site. The predictor converges on the actual landing point ~11 minutes
+before touchdown, so aiming for the site becomes reading a gauge instead
+of deriving orbital mechanics.
+
 ## Presets and difficulty
 
 The default planet `"easy"` is Kerbin-scale: Earth surface gravity but a
@@ -188,12 +225,16 @@ The full round trip (`--mission return`, easy planet) costs the autopilot
 ~5.3 km/s: ascent, a ~660 m/s deorbit burn, a drag-braked reentry, and a
 landing burn to a touchdown ~0.1 km from the pad.
 
-The moon mission needs roughly all 6.9 km/s: ~4.07 ascent + ~0.57
-injection + ~2.15 arrival braking leaves nothing for losses, which is why
-the scripted pilot ends a few km short of touchdown (the easy moon's
-on-rails speed is what makes it brutal: any arrival costs
-`sqrt(v_inf² + v_esc²)` ≈ 2.15 km/s at the surface, v_inf ≥ 1.29 km/s
-even on a perfect Hohmann). On `earth` the budget does not close at all.
+The moon mission flies a dedicated ~10 km/s rocket (`ROCKETS["moon"]`,
+the `ToMoon-v0` default): arrival costs `sqrt(v_inf² + v_esc²)` ≈
+1.8 km/s at the surface (the moon's own 1.73 km/s escape velocity
+dominates; v_inf ≈ 0.4 km/s on the transfer), and on the 6.9 km/s shared
+rocket the ~4.07 ascent + ~0.57 injection + arrival braking left almost
+nothing for descent losses — the mission closed only on a perfect
+flight, if at all. The moon rocket keeps the same liftoff TWR and
+stage-1 burn time so the same ascent flies, and its big vacuum stage
+pays for injection, braking, and the landing with ~3.4 km/s to spare.
+On `earth` the budget still does not close at all.
 
 Make it easier or harder by constructing the env directly: planets and
 rockets are plain dataclasses (`Planet`, `Rocket`, `Stage` in

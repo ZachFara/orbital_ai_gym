@@ -112,12 +112,19 @@ PLANETS: dict[str, Planet] = {
 
 MOONS: dict[str, Moon] = {
     # Gameplay moons (short-period transfers suitable for RL episodes).
+    # Periods are Keplerian for the orbit radius (T = 2*pi*sqrt(r^3/mu)).
+    # Rails at any other speed make the moon-relative frame non-inertial:
+    # a lander fights a phantom v^2/r - mu_p/r^2 acceleration (the old
+    # arbitrary 7200 s period put 1.2 m/s^2 of it -- 14% of moon surface
+    # gravity, and most of local gravity up at braking altitude -- under
+    # every landing, and made anything co-moving with the moon
+    # planet-hyperbolic).
     "easy": Moon(
         name="easy_moon",
         radius=160_000.0,
         mu=2.4e11,
         orbit_radius=2_400_000.0,
-        orbit_period=7_200.0,
+        orbit_period=2.0 * math.pi * (2_400_000.0**3 / PLANETS["easy"].mu) ** 0.5,
         site_angle=0.0,
     ),
     "earth": Moon(
@@ -125,7 +132,7 @@ MOONS: dict[str, Moon] = {
         radius=700_000.0,
         mu=8.0e12,
         orbit_radius=18_000_000.0,
-        orbit_period=28_000.0,
+        orbit_period=2.0 * math.pi * (18_000_000.0**3 / PLANETS["earth"].mu) ** 0.5,
         site_angle=0.0,
     ),
 }
@@ -139,6 +146,23 @@ ROCKETS: dict[str, Rocket] = {
                   isp=280.0, cd_area=8.0),
             Stage(dry_mass=1_000.0, prop_mass=2_000.0, thrust=60_000.0,
                   isp=320.0, cd_area=3.0),
+        ),
+        max_turn_rate=math.radians(15.0),
+    ),
+    # ~10 km/s ideal delta-v: the moon-mission rocket (ToMoon default on
+    # "easy"). Arrival braking costs ~1.8 km/s (the moon's own escape
+    # velocity dominates), and on the 6.9 km/s "easy" rocket the ascent,
+    # injection, arrival, and descent losses close only on a perfect
+    # flight, if at all. Liftoff TWR and stage-1 burn time match "easy" so
+    # the same ascent profile flies; the vacuum stage is the tug that pays
+    # for injection, capture, and landing.
+    "moon": Rocket(
+        name="moon",
+        stages=(
+            Stage(dry_mass=6_200.0, prop_mass=31_000.0, thrust=740_000.0,
+                  isp=280.0, cd_area=13.0),
+            Stage(dry_mass=1_000.0, prop_mass=6_000.0, thrust=137_000.0,
+                  isp=350.0, cd_area=5.0),
         ),
         max_turn_rate=math.radians(15.0),
     ),

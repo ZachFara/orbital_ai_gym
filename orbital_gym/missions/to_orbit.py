@@ -67,6 +67,26 @@ def _wrap_pi(angle: float) -> float:
     return (angle + math.pi) % TWO_PI - math.pi
 
 
+def _elements(mu: float, body_radius: float, rx: float, ry: float,
+              vx: float, vy: float):
+    """Orbital elements of a body-relative state:
+    (periapsis_alt, apoapsis_alt, specific_energy, eccentricity).
+
+    Apoapsis is +inf on escape trajectories.
+    """
+    rn = math.hypot(rx, ry)
+    v2 = vx * vx + vy * vy
+    energy = 0.5 * v2 - mu / rn
+    h = rx * vy - ry * vx
+    ecc2 = 1.0 + 2.0 * energy * h * h / (mu * mu)
+    ecc = math.sqrt(max(0.0, ecc2))
+    if energy >= 0.0:
+        peri = (h * h / mu) / (1.0 + ecc) - body_radius if ecc > 0 else rn - body_radius
+        return peri, math.inf, energy, ecc
+    sma = -mu / (2.0 * energy)
+    return sma * (1.0 - ecc) - body_radius, sma * (1.0 + ecc) - body_radius, energy, ecc
+
+
 class TwoStageToOrbitEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
     OBS_SIZE = 9  # subclasses that append observations override this
@@ -176,8 +196,8 @@ class TwoStageToOrbitEnv(gym.Env):
         if self._terminal is None:
             if (
                 alt_after > cutoff
-                and energy >= 0.0
                 and self._propellant_left() <= 0.0
+                and self._is_escaping()
             ):
                 self._terminal = "escaped"
             elif (
@@ -365,22 +385,17 @@ class TwoStageToOrbitEnv(gym.Env):
         return _wrap_pi(self._theta - math.atan2(ty, tx))
 
     def _orbit_elements(self):
-        """Returns (periapsis_alt, apoapsis_alt, specific_energy, eccentricity).
-
-        Apoapsis is +inf on escape trajectories.
+        """Returns (periapsis_alt, apoapsis_alt, specific_energy, eccentricity)
+        relative to the planet. Apoapsis is +inf on escape trajectories.
         """
         p = self.planet
-        rn = math.hypot(self._rx, self._ry)
-        v2 = self._vx * self._vx + self._vy * self._vy
-        energy = 0.5 * v2 - p.mu / rn
-        h = self._rx * self._vy - self._ry * self._vx
-        ecc2 = 1.0 + 2.0 * energy * h * h / (p.mu * p.mu)
-        ecc = math.sqrt(max(0.0, ecc2))
-        if energy >= 0.0:
-            peri = (h * h / p.mu) / (1.0 + ecc) - p.radius if ecc > 0 else rn - p.radius
-            return peri, math.inf, energy, ecc
-        sma = -p.mu / (2.0 * energy)
-        return sma * (1.0 - ecc) - p.radius, sma * (1.0 + ecc) - p.radius, energy, ecc
+        return _elements(p.mu, p.radius, self._rx, self._ry, self._vx, self._vy)
+
+    def _is_escaping(self) -> bool:
+        """Guaranteed to leave: hyperbolic relative to the planet. Missions
+        with more bodies override this -- near a moon the planet-centric
+        elements say nothing about where the rocket is actually headed."""
+        return self._orbit_elements()[2] >= 0.0
 
     def _propellant_left(self) -> float:
         upper = sum(s.prop_mass for s in self.rocket.stages[self._stage + 1:])

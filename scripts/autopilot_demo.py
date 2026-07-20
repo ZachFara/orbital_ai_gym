@@ -8,12 +8,11 @@ retrograde at a fixed lead angle before the pad, fall through the atmosphere
 (drag does most of the braking), and finish with a vertical landing burn.
 
 The moon mission launches WESTWARD (the moon orbits counterclockwise, so an
-eastward orbit meets it head-on at ~2.9 km/s closing speed), holds a low
+eastward orbit meets it head-on at ~2 km/s closing speed), holds a low
 parking orbit, fires trans-lunar injection when the phasing solution enters
-its window, coasts out, and brakes retrograde into a grazing near-landing.
-The rocket's delta-v budget is razor thin for this mission: the pilot brakes
-to a slow near-touchdown but runs its tank dry in the last few km -- close
-enough to be the demonstration/starting-point for RL (train_guided.py).
+its window, coasts out, and brakes retrograde into a soft off-site landing.
+Putting the touchdown ON the site is deliberately left to RL
+(train_guided.py starts its policies from this pilot's flights).
 
 Run:  python scripts/autopilot_demo.py [--mission orbit|return|moon] [--planet easy|earth] [--render]
 """
@@ -176,7 +175,8 @@ class MoonAutopilot:
     """ascend -> coast -> inject -> hold -> tli -> transfer -> brake -> descend.
 
     Everything is flown westward: the moon orbits counterclockwise, and only
-    a co-rotating approach keeps the arrival speed (~1.3 km/s) affordable.
+    a co-rotating approach keeps the excess arrival speed (~0.4 km/s over
+    the moon's own escape velocity) affordable.
     The ascent is leaner than the base Autopilot's (~4.07 vs ~4.27 km/s):
     gravity-turn schedule, coast to apoapsis, then a level vacuum burn that
     holds altitude with gravity-feedforward attitude until the periapsis
@@ -189,9 +189,9 @@ class MoonAutopilot:
     only when it is within cheap reach.
 
     Tuned on the "easy" planet/moon pair; the delta-v budget does not close
-    on "earth". Even on "easy" the tank runs dry in the last few km with
-    the pilot at ~50-300 m/s -- the mission's final margin is what
-    train_guided.py leaves for RL to find.
+    on "earth". On "easy" it touches down at the descent profile's ~8 m/s
+    floor with ~3.4 km/s to spare -- but a couple hundred km off the site.
+    Reaching the site is what train_guided.py leaves for RL to learn.
     """
 
     PERI_FRAC = 1.03       # parking-orbit periapsis, * atmosphere cutoff
@@ -200,7 +200,11 @@ class MoonAutopilot:
     TURN_EXP = 0.78
     TLI_BAND = (0.995, 1.005)  # accepted transfer apoapsis, * moon orbit radius
     BRAKE_MARGIN = 0.93    # accel fraction the stopping-distance trigger assumes
-    BRAKE_LEAD = 1.45      # stopping distance vs radial gap (graze path is longer)
+    BRAKE_LEAD = 1.28      # stopping distance vs radial gap; center of the
+                           # landing plateau [1.20, 1.35] on the moon rocket
+                           # (scanned; the Keplerian moon's arrival is slow
+                           # and shallow, so the flight path runs well past
+                           # the radial gap)
     GATE_ALT = 4_000.0     # descend handoff altitude scale, m
     SITE_REACH = 30_000.0  # only steer for the site when within this, m
 
@@ -438,9 +442,26 @@ class MoonAutopilot:
         vt_des = max(-60.0, min(60.0, 0.05 * x_err))
         slow = 1.0 / (1.0 + abs(x_err) / 2_000.0)
         a_av = self._accel_avail(info)
-        k = 1.5 * max(2.0, a_av - g_m)
-        vr_des = -max(20.0, slow * math.sqrt(k * max(0.0, malt - 25.0)))
-        a_cmd = g_m * um + 0.8 * ((vr_des - vr_rel) * um + (vt_des - vt_rel) * tm)
+        # ride well inside the suicide boundary (v^2 = 2(a-g)d): the profile's
+        # required thrust is k/2 + g_m, and tracking it with a P-loop needs
+        # headroom -- k near the boundary commands an uncatchable dive
+        k = 0.8 * max(2.0, a_av - g_m)
+        # floor well under the 25 m/s soft-landing threshold: the touchdown
+        # speed is this floor plus tracking residue
+        vr_prof = slow * math.sqrt(k * max(0.0, malt - 25.0))
+        vr_des = -max(8.0, vr_prof)
+        # riding v = s*sqrt(k*d) takes s^2*k/2 of deceleration on top of
+        # gravity; without this feedforward the P-loop carries a standing
+        # (k/2)/gain speed error all the way to the ground, which is the
+        # difference between touching down at ~10 m/s and at ~25. Only while
+        # actually on the profile from above: while still under it the right
+        # move is free fall, and feeding the decel forward there means
+        # hovering down on the engine until the tank runs dry
+        ff = 0.5 * k * slow * slow if (vr_prof > 8.0 and vr_rel <= vr_des) else 0.0
+        # never thrust downward: above the boundary profile the right move
+        # is free fall, not a powered dive that must itself be killed
+        a_r = max(0.0, g_m + ff + 0.8 * (vr_des - vr_rel))
+        a_cmd = a_r * um + 0.8 * (vt_des - vt_rel) * tm
         return self._act_world(math.atan2(a_cmd[1], a_cmd[0]),
                                min(1.0, float(np.linalg.norm(a_cmd)) / a_av))
 
