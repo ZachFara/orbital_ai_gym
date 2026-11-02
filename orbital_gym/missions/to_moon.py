@@ -63,6 +63,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         moon_site_radius: float = 8_000.0,
         moon_landing_speed: float = 25.0,
         attitude_control: bool = True,
+        hover_control: bool = False,
         render_mode: str | None = None,
     ):
         planet_obj = PLANETS[planet] if isinstance(planet, str) else planet
@@ -105,6 +106,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
             crash_speed=crash_speed,
             terminate_on_orbit=False,
             attitude_control=attitude_control,
+            hover_control=hover_control,
             render_mode=render_mode,
         )
 

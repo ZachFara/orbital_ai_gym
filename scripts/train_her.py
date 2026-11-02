@@ -144,10 +144,56 @@ def landed_soft(info: dict) -> bool:
     return info.get("termination") in SOFT_TERMS
 
 
-SUCCESS_BONUS = 50.0
-FAILURE_PENALTY = 50.0
+# Terminal magnitudes, set from --reward-scale. They sit against a dense term
+# bounded by 1, and the critic has to fit both through bootstrapping: at the
+# original +-50 that is a 50:1 ratio, which is a classic way to destabilize a
+# TD critic. Kept module-level (not threaded through) so main() can retune
+# them once and every caller -- env, HER relabeling, demo replay -- agrees.
+SUCCESS_BONUS = 5.0
+FAILURE_PENALTY = 5.0
 CRASH_SPEED_REF = 500.0  # impact speed at which the crash penalty saturates
-CRASH_PENALTY_FLOOR = 0.1
+# A marginal crash must still cost more than a soft landing earns, or "crash
+# slowly near the site" beats "land softly further away" -- measured, a
+# 65 m/s crash scored +0.96 against -2.14 for a soft touchdown 19 km out.
+CRASH_PENALTY_FLOOR = 0.3
+SOFT_BONUS_FRAC = 0.2    # credit for a soft touchdown anywhere, vs on-site
+DENSE_SITE_RADII = 3.0   # shaping denominator, in site radii (~the goal arc)
+DENSE_STEP_CLIP = 0.2    # no single step may dominate the outcome
+# Residual-mode goal arc, rad. ~8.6 deg = ~24 km of surface, three times the
+# 8 km site radius: a do-nothing policy lands on the commanded site only about
+# a third of the time, so there is real targeting left to learn.
+RESIDUAL_ARC = 0.15
+
+# Dense soft-descent shaping. The touchdown is knife-edge (~1 m/s vs 25) and the
+# terminal soft/crash signal is only felt at the very end, so the policy has to
+# STUMBLE onto a soft descent -- which exploration tight enough to survive can't
+# do. This makes "stay landable" a dense gradient: a potential on how far the
+# moon-relative speed exceeds what can still be braked to a stop by the surface
+# (v_prof = sqrt(2*a_net*altitude)). Zero on a landable descent, sharply
+# negative on a dive. Potential-based (reward is the change), so per Ng et al.
+# it adds gradient WITHOUT changing the optimal policy and cannot be farmed.
+DESCENT_SHAPE_W = 2.0     # weight; set from --descent-shape-w (0 disables)
+DESCENT_V_SCALE = 300.0   # m/s of excess speed that scores one potential unit
+DESCENT_SAFE = 0.95       # aim to stay under this fraction of the stop profile
+
+
+def descent_potential(u) -> float:
+    """Landability potential in the moon frame: 0 when the moon-relative speed
+    is within what can still be braked to a stop by the surface, negative (and
+    growing) as the descent dives past it. Goal-independent, so it shapes the
+    descent without touching the site-targeting reward."""
+    mvx, mvy = u._moon_velocity()
+    v = math.hypot(u._vx - mvx, u._vy - mvy)
+    d = u._moon_distance()
+    if d > u.moon_soi:
+        return 0.0  # only shape once near the moon
+    malt = max(1.0, d - u.moon.radius)
+    a_max = u.rocket.stages[u._stage].thrust / u._mass
+    g_m = u.moon.mu / (d * d)
+    a_net = max(0.5, 0.85 * a_max - g_m)
+    v_prof = math.sqrt(2.0 * a_net * malt)
+    excess = max(0.0, v - DESCENT_SAFE * v_prof)
+    return -min(3.0, excess / DESCENT_V_SCALE)
 
 
 def goal_arc(achieved: np.ndarray, desired: np.ndarray,
@@ -170,13 +216,21 @@ def goal_success(achieved, desired, infos, moon_radius, site_radius) -> np.ndarr
 
 def goal_reward(achieved: np.ndarray, desired: np.ndarray, infos: list,
                 moon_radius: float, site_radius: float) -> np.ndarray:
-    """Vectorized HER reward, dense in the goal.
+    """Vectorized HER reward, dense in the goal but potential-based.
 
-    Per step: -arc/(pi*R) in [-1, 0], the normalized surface distance between
-    where this trajectory is headed and the commanded site. Because it is a
-    function of the goal at EVERY step, relabeling a whole trajectory produces
-    a whole trajectory of informative rewards -- a purely terminal criterion
-    gave HER one usable transition in ~480 (0.15%), which is not learnable.
+    Per step: how much CLOSER the predicted touchdown moved to the site, in
+    site-radii. It is a function of the goal at every step, so relabeling a
+    trajectory produces a trajectory of informative rewards -- a purely
+    terminal criterion gave HER one usable transition in ~480 (0.15%), which
+    is not learnable.
+
+    The difference form matters. As a per-step level (-arc/(pi*R)) it summed
+    over ~592 steps to about -12 at a 10 km miss, dwarfing a -5 crash, so
+    wrecking the landing to shave the miss was a winning trade and the policy
+    took it (soft landings went 12/12 -> 0/12 while the miss improved). In
+    difference form it telescopes to a bounded total, leaving the terminal
+    outcome dominant -- the same potential-based shaping the missions
+    themselves use so progress rewards cannot be farmed.
 
     Terminal: +SUCCESS_BONUS for a soft touchdown inside the site radius,
     -FAILURE_PENALTY for ending the episode ANY other way. The penalty must
@@ -191,7 +245,13 @@ def goal_reward(achieved: np.ndarray, desired: np.ndarray, infos: list,
     the ground, so a crash stays heavily negative for every relabeled goal.
     """
     arc = goal_arc(achieved, desired, moon_radius)
-    reward = -arc / (math.pi * moon_radius)
+    # the previous step's aim point, carried in info so relabeled goals get a
+    # consistent before/after pair
+    prev = np.stack([np.asarray(i.get("prev_achieved", a), dtype=np.float64)
+                     for i, a in zip(infos, np.asarray(achieved).reshape(-1, GOAL_DIM))])
+    arc_prev = goal_arc(prev, desired, moon_radius)
+    reward = np.clip((arc_prev - arc) / (DENSE_SITE_RADII * site_radius),
+                     -DENSE_STEP_CLIP, DENSE_STEP_CLIP)
     soft = np.array([bool(i.get("landed_soft", False)) for i in infos])
     # a terminal step is any step the env labeled; non-terminal steps have None
     ended = np.array([bool(i.get("termination")) for i in infos])
@@ -207,8 +267,15 @@ def goal_reward(achieved: np.ndarray, desired: np.ndarray, infos: list,
     scale = np.where(crashed,
                      np.clip(speed / CRASH_SPEED_REF, CRASH_PENALTY_FLOOR, 1.0),
                      1.0)
-    reward = reward + SUCCESS_BONUS * (soft & (arc <= site_radius))
+    on_site = soft & (arc <= site_radius)
+    reward = reward + SUCCESS_BONUS * on_site
+    # a soft touchdown anywhere is still a landing, and must beat any crash
+    reward = reward + SUCCESS_BONUS * SOFT_BONUS_FRAC * (soft & ~on_site)
     reward = reward - FAILURE_PENALTY * scale * (ended & ~soft)
+    # dense soft-descent shaping, precomputed per step and stored in info so it
+    # is goal-independent (HER relabeling leaves it untouched, as it should --
+    # how softly you descend does not depend on which site you aimed at)
+    reward = reward + np.array([float(i.get("descent_shaping", 0.0)) for i in infos])
     return reward.astype(np.float32)
 
 
@@ -238,10 +305,19 @@ class TD3BC(TD3):
     bc_alpha = 2.5  # class attribute, not a ctor kwarg, so .load() round-trips
     # lambda = bc_alpha / mean|Q| explodes while the critic is untrained and
     # mean|Q| ~ 0, which swamps the BC anchor exactly when it is needed most
-    # (measured: collapse by 3k steps even WITH the BC term). Capping it keeps
-    # the anchor meaningful early; once Q reaches its true scale (~50 here, the
-    # terminal bonus) lambda falls to ~0.05 and the cap stops binding.
-    bc_lambda_max = 1.0
+    # (measured: collapse by 3k steps even WITH the BC term). The cap exists
+    # only to survive that startup window -- set it too low and it never
+    # releases: at mean|Q| = 0.63 a cap of 1.0 held lambda at 1.0 instead of
+    # 3.97 and throttled the RL term permanently, leaving the residual pinned
+    # near zero while landings stayed perfect and nothing was learned.
+    bc_lambda_max = 10.0
+    # Weight on the BC term during training. Direct mode needs it (the anchor
+    # is the expert). Residual mode must NOT: there the expert is a ZERO
+    # residual, so the same term is a straight penalty on acting at all --
+    # measured, the policy used 4% of its authority and never beat the
+    # do-nothing baseline. BC still sets the starting point via bc_pretrain;
+    # what bounds the policy afterwards is residual_scale, not this.
+    bc_weight = 1.0
     demo_obs: dict | None = None
     demo_act = None
 
@@ -334,7 +410,9 @@ class TD3BC(TD3):
                 q_pi = self.critic.q1_forward(replay_data.observations, pi)
                 lmbda = th.clamp(self.bc_alpha / q_pi.abs().mean().detach(),
                                  max=self.bc_lambda_max)
-                if self.demo_act is not None:
+                if self.bc_weight <= 0.0:
+                    bc_loss = th.zeros((), device=self.device)
+                elif self.demo_act is not None:
                     idx = th.randint(0, len(self.demo_act), (batch_size,),
                                      device=self.device)
                     bc_loss = F.mse_loss(
@@ -342,7 +420,7 @@ class TD3BC(TD3):
                         self.demo_act[idx])
                 else:
                     bc_loss = F.mse_loss(pi, replay_data.actions)
-                actor_loss = -lmbda * q_pi.mean() + bc_loss
+                actor_loss = -lmbda * q_pi.mean() + self.bc_weight * bc_loss
                 actor_losses.append(actor_loss.item())
                 bc_losses.append(bc_loss.item())
 
@@ -384,12 +462,18 @@ class GoalMoonEnv(gym.Env):
     def __init__(self, actions: list[np.ndarray], handoff: float,
                  site_center: float, site_arc: float, max_steps: int,
                  site_radius: float | None = None, render_mode: str | None = None,
-                 seed: int | None = None):
+                 seed: int | None = None, n_pre: int | None = None,
+                 env_max_steps: int | None = None, hover_control: bool = False):
         super().__init__()
-        self.env = ToMoonEnv(render_mode=render_mode)
+        kw = dict(render_mode=render_mode, hover_control=hover_control)
+        if env_max_steps is not None:
+            kw["max_episode_steps"] = env_max_steps
+        self.env = ToMoonEnv(**kw)
         u = self.env
         self._actions = actions
-        self._n_pre = int(handoff * len(actions))
+        # orbit-first hands off at a fixed step (parking-orbit entry); the
+        # window modes hand off at a fraction of the expert episode
+        self._n_pre = n_pre if n_pre is not None else int(handoff * len(actions))
         self.site_center = site_center
         self.site_arc = site_arc
         self.max_steps = max_steps
@@ -435,13 +519,22 @@ class GoalMoonEnv(gym.Env):
         u._last_site_d = u._moon_site_distance()
         self._desired = _desired_cossin(u)
         self._t = 0
+        self._prev_achieved = _achieved_cossin(u)
+        self._prev_phi = descent_potential(u)
         info = dict(u._info())
         info["landed_soft"] = False
+        self._last_info = info
         return goal_obs(u), info
+
+    def _env_action(self, action):
+        """What actually reaches the env. Identity here; the residual variant
+        adds the policy's correction on top of the autopilot."""
+        return action
 
     def step(self, action):
         u = self.env
-        _, _, terminated, truncated, info = self.env.step(action)
+        prev_achieved = self._prev_achieved
+        _, _, terminated, truncated, info = self.env.step(self._env_action(action))
         self._t += 1
         info = dict(info)
         if self._t >= self.max_steps and not terminated:
@@ -450,12 +543,18 @@ class GoalMoonEnv(gym.Env):
             truncated = True
             info["termination"] = info.get("termination") or "window_limit"
         info["landed_soft"] = landed_soft(info)
+        info["prev_achieved"] = prev_achieved
+        phi = descent_potential(u)
+        info["descent_shaping"] = DESCENT_SHAPE_W * (phi - self._prev_phi)
+        self._prev_phi = phi
         gobs = goal_obs(u)
+        self._prev_achieved = gobs["achieved_goal"]
         reward = float(goal_reward(gobs["achieved_goal"], self._desired, [info],
                                    self.moon_radius, self.site_radius)[0])
         info["is_success"] = bool(goal_success(gobs["achieved_goal"], self._desired,
                                                [info], self.moon_radius,
                                                self.site_radius)[0])
+        self._last_info = info
         return gobs, reward, terminated, truncated, info
 
     def compute_reward(self, achieved_goal, desired_goal, info):
@@ -469,6 +568,98 @@ class GoalMoonEnv(gym.Env):
 
     def close(self):
         self.env.close()
+
+
+class ResidualGoalMoonEnv(GoalMoonEnv):
+    """The policy corrects the autopilot instead of replacing it.
+
+        env_action = clip(pilot(info) + residual_scale * policy(obs), -1, 1)
+
+    This exists because cloning the expert is what kept failing. The landing
+    rides the suicide-burn profile to the ground at 8 m/s against a 25 m/s
+    limit, and a 0.010-MSE clone still arrived at ~450 m/s; TD3 then had to
+    cross 450 -> 25 m/s by exploration from a buffer containing no successes
+    of its own, which it never did in 150k steps.
+
+    A ZERO residual is exactly the autopilot, so the policy starts already
+    soft-landing: exploration begins from success, every seeded episode is a
+    real landing, and the correction only has to move the touchdown, not
+    rediscover how to touch down. The residual is bounded because the profile
+    is delicate -- measured, 0.005 of raw action noise already shifts the
+    touchdown ~15 degrees, so a small correction has plenty of authority.
+
+    The autopilot's mode machine is stateful, so a pilot constructed fresh at
+    the handoff would think it was still on the launch pad. Its state is
+    snapshotted alongside the env's and restored on every reset.
+    """
+
+    def __init__(self, *args, residual_scale: float = 0.1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.residual_scale = residual_scale
+        self.pilot = MoonAutopilot(self.env)
+        self._pilot_snap = None
+
+    def _ensure_snapshot(self):
+        if self._snap is not None:
+            return
+        u = self.env
+        _, info = u.reset()
+        self.pilot = MoonAutopilot(u)
+        # fly the approach with a LIVE pilot so its mode machine is warmed up
+        for _ in range(self._n_pre):
+            _, _, term, trunc, info = u.step(self.pilot(info))
+            if term or trunc:
+                break
+        self._snap = {k: copy.deepcopy(v) for k, v in u.__dict__.items()
+                      if k.startswith("_") and k not in self.SNAP_SKIP}
+        self._pilot_snap = {k: copy.deepcopy(v)
+                            for k, v in self.pilot.__dict__.items() if k != "env"}
+
+    def reset(self, *, seed: int | None = None, options: dict | None = None):
+        obs, info = super().reset(seed=seed, options=options)
+        self.pilot.__dict__.update(
+            {k: copy.deepcopy(v) for k, v in self._pilot_snap.items()})
+        self._last_info = dict(self.env._info())
+        self._last_info["landed_soft"] = False
+        return obs, info
+
+    def _env_action(self, action):
+        base = np.asarray(self.pilot(self._last_info), dtype=np.float64)
+        res = np.asarray(action, dtype=np.float64).flatten()
+        return np.clip(base + self.residual_scale * res, -1.0, 1.0).astype(np.float32)
+
+
+def collect_residual_demos(env: ResidualGoalMoonEnv, episodes: int, noise: float,
+                           seed: int):
+    """Fly the residual env with a near-zero residual.
+
+    The autopilot is doing the flying, so essentially every episode is a real
+    soft landing -- the thing 150k steps of clone-and-improve never produced.
+    Actions stored are the RESIDUALS (what the policy controls), not the
+    combined command.
+    """
+    rng = np.random.default_rng(seed)
+    n_act = int(env.action_space.shape[0])
+    episodes_out, bc_obs, bc_act, bearings = [], [], [], []
+    softs = 0
+    for _ in range(episodes):
+        obs, info = env.reset()
+        done = False
+        traj = []
+        while not done:
+            res = np.zeros(n_act, np.float32) if noise <= 0 else np.clip(
+                rng.normal(0.0, noise, n_act), -1.0, 1.0).astype(np.float32)
+            nxt, r, term, trunc, info = env.step(res)
+            done = term or trunc
+            traj.append((obs, nxt, res, r, done, info))
+            bc_obs.append(obs)
+            bc_act.append(res)
+            obs = nxt
+        if landed_soft(info):
+            softs += 1
+            bearings.append(body_bearing(env.env))
+        episodes_out.append(traj)
+    return episodes_out, bc_obs, bc_act, bearings, softs
 
 
 # --- expert flights ----------------------------------------------------------
@@ -510,6 +701,95 @@ def expert_actions() -> list[np.ndarray]:
     return fly_expert()[0]
 
 
+def natural_touchdown_bearing() -> float:
+    """Body-frame longitude a clean autopilot flight touches down at. Used as
+    a provisional goal-arc center before the demos measure the real span."""
+    return fly_expert()[3]
+
+
+# --- orbit-first expert (the whole point of the from-orbit RL setup) ---------
+
+ORBIT_ENV_STEPS = 12_000  # the orbit flight is ~6250 steps; leave room to coast
+
+
+def orbit_expert(site_angle: float = 0.0, hover_control: bool = False):
+    """Fly the orbit-first autopilot: it captures into a low moon orbit, waits,
+    deorbits timed for the site, and lands ON it (~1 m/s, any site).
+
+    Returns (actions, n_orbit, info): the action sequence, the step index where
+    it enters the parking orbit (the RL handoff point -- RL learns everything
+    from there: when to deorbit and how to descend), and the terminal info.
+    """
+    env = ToMoonEnv(max_episode_steps=ORBIT_ENV_STEPS, hover_control=hover_control)
+    _, info = env.reset(options={"site_angle": site_angle})
+    pilot = MoonAutopilot(env, orbit=True)
+    actions, n_orbit = [], None
+    post_capture = ("moon_orbit", "deorbit", "pdescend")
+    while True:
+        a = np.asarray(pilot(info), dtype=np.float32)
+        actions.append(a)
+        # capture-complete is the handoff, whether or not it lingers in
+        # moon_orbit -- for some sites the deorbit trigger fires the instant
+        # the orbit is reached, skipping the coast in a single step
+        if n_orbit is None and pilot.mode in post_capture:
+            n_orbit = len(actions) - 1
+        _, _, term, trunc, info = env.step(a)
+        if term or trunc:
+            break
+    env.close()
+    if n_orbit is None:
+        raise SystemExit("orbit expert never reached a parking orbit")
+    return actions, n_orbit, info
+
+
+def collect_orbit_demos(n_pre: int, site_radius: float, max_steps: int,
+                        sites, seed: int, hover_control: bool = False):
+    """Fly the orbit expert at each site and keep the from-orbit segment
+    (handoff onward) as buffer transitions + BC pairs. The expert lands on the
+    site for every site, so every demo is an on-site soft landing -- ideal HER
+    seeds, and the whole reachable arc is covered by construction."""
+    moon_radius = ToMoonEnv().moon.radius
+    all_trans, all_bc_obs, all_bc_act, bearings = [], [], [], []
+    softs = 0
+    for site in sites:
+        acts, n_orbit, _ = orbit_expert(site, hover_control=hover_control)
+        env = ToMoonEnv(max_episode_steps=ORBIT_ENV_STEPS, hover_control=hover_control)
+        env.reset(options={"site_angle": site})
+        obs = goal_obs(env)
+        traj = []
+        prev = obs["achieved_goal"]
+        prev_phi = descent_potential(env)
+        for i, a in enumerate(acts):
+            _, _, term, trunc, info = env.step(a)
+            info = dict(info)
+            info["landed_soft"] = landed_soft(info)
+            info["prev_achieved"] = prev
+            phi = descent_potential(env)
+            info["descent_shaping"] = DESCENT_SHAPE_W * (phi - prev_phi)
+            prev_phi = phi
+            nxt = goal_obs(env)
+            if i >= n_pre:
+                r = float(goal_reward(nxt["achieved_goal"], nxt["desired_goal"],
+                                      [info], moon_radius, site_radius)[0])
+                done = term or trunc or (i - n_pre + 1) >= max_steps
+                traj.append((obs, nxt, a, r, done, info))
+                all_bc_obs.append(obs)
+                all_bc_act.append(a)
+            obs = nxt
+            prev = nxt["achieved_goal"]
+            if term or trunc or (i - n_pre + 1) >= max_steps:
+                break
+        if traj:
+            o, no, a, r, _, ii = traj[-1]
+            traj[-1] = (o, no, a, r, True, ii)
+        if landed_soft(info):
+            softs += 1
+            bearings.append(body_bearing(env))
+        all_trans.append(traj)
+        env.close()
+    return all_trans, all_bc_obs, all_bc_act, bearings, softs
+
+
 def replay_window(exec_acts, clean_acts, site: float, n_pre: int, max_steps: int,
                   moon_radius: float, site_radius: float):
     """Re-fly a recorded action sequence with the site set, collecting the
@@ -545,6 +825,18 @@ def replay_window(exec_acts, clean_acts, site: float, n_pre: int, max_steps: int
     return transitions, bc_obs, bc_act
 
 
+def derive_arc(bearings: list[float], site_arc: float | None,
+               arc_margin: float) -> tuple[float, float]:
+    """The goal arc is the span the demos actually landed in -- wrap-safe, and
+    tight rather than generous: commanding goals no trajectory in the buffer
+    ever reached would train against targets nothing demonstrates."""
+    cm = math.atan2(float(np.mean(np.sin(bearings))), float(np.mean(np.cos(bearings))))
+    dev = [math.atan2(math.sin(b - cm), math.cos(b - cm)) for b in bearings]
+    center = cm + 0.5 * (min(dev) + max(dev))
+    arc = site_arc if site_arc is not None else 0.5 * (max(dev) - min(dev)) + arc_margin
+    return center, arc
+
+
 def collect_demos(n_pre: int, max_steps: int, site_radius: float, episodes: int,
                   noise: float, tail: int, n_nominal: int, seed: int,
                   arc_margin: float, site_arc: float | None):
@@ -569,13 +861,7 @@ def collect_demos(n_pre: int, max_steps: int, site_radius: float, episodes: int,
     if not bearings:
         raise SystemExit("no soft expert landings collected; lower --noise")
 
-    # The goal arc is the span the demos actually landed in -- wrap-safe, and
-    # tight rather than generous: commanding goals no trajectory in the buffer
-    # ever reached would train against targets nothing demonstrates.
-    cm = math.atan2(float(np.mean(np.sin(bearings))), float(np.mean(np.cos(bearings))))
-    dev = [math.atan2(math.sin(b - cm), math.cos(b - cm)) for b in bearings]
-    center = cm + 0.5 * (min(dev) + max(dev))
-    arc = site_arc if site_arc is not None else 0.5 * (max(dev) - min(dev)) + arc_margin
+    center, arc = derive_arc(bearings, site_arc, arc_margin)
 
     rng = np.random.default_rng(seed)
     all_trans, all_bc_obs, all_bc_act = [], [], []
@@ -631,15 +917,16 @@ def bc_pretrain(model: TD3, obs_list: list[dict], act: list[np.ndarray],
 
 # --- evaluation ---------------------------------------------------------------
 
-def evaluate(model_path: str, episodes: int, device: str, handoff: float,
-             center: float, arc: float, max_steps: int, site_radius: float,
-             actions: list[np.ndarray], watch: bool = False,
-             model: TD3BC | None = None) -> tuple[int, int]:
-    render = "human" if watch else None
-    env = GoalMoonEnv(actions, handoff, center, arc, max_steps,
-                      site_radius=site_radius, render_mode=render, seed=12345)
+def evaluate(model_path: str, episodes: int, device: str, make_env,
+             watch: bool = False, model: TD3BC | None = None) -> tuple[int, int]:
+    env = make_env("human" if watch else None, seed=12345)
     if model is None:
-        model = TD3BC.load(model_path, device=device)
+        # HerReplayBuffer is in the saved kwargs and SB3 refuses to rebuild it
+        # without an env, so hand it the eval env; shrink the buffer too, since
+        # loading otherwise allocates the full training-size replay arrays for
+        # a run that never stores a transition
+        model = TD3BC.load(model_path, env=env, device=device,
+                           custom_objects={"buffer_size": 1})
     hits = softs = 0
     misses = []
     for ep in range(episodes):
@@ -687,9 +974,27 @@ def main():
     ap.add_argument("--demos", type=int, default=30,
                     help="expert flights to fly; all of them teach BC, the "
                          "ones that land softly (~30%%) seed the HER buffer")
-    ap.add_argument("--noise", type=float, default=0.01,
-                    help="demo approach noise; applied only before the last "
-                         "--noise-tail steps (the descent has no margin)")
+    ap.add_argument("--orbit", action="store_true",
+                    help="orbit-first: the autopilot parks in a low moon orbit, "
+                         "then the policy flies deorbit+descent+landing DIRECT "
+                         "(no residual). Site targeting becomes a deorbit-timing "
+                         "problem RL can actually learn; goals span the whole "
+                         "moon. This is the recommended setup.")
+    ap.add_argument("--residual", action="store_true",
+                    help="learn a bounded correction to the autopilot instead "
+                         "of replacing it; a zero action IS the autopilot, so "
+                         "training starts from a soft landing")
+    ap.add_argument("--residual-scale", type=float, default=0.1,
+                    help="how much of the action range the correction may move")
+    ap.add_argument("--no-hover", action="store_true",
+                    help="orbit mode: use raw throttle instead of hover-relative "
+                         "control (a[0]=0 = hover). Hover control is on by "
+                         "default for --orbit; the landing throttle band is a "
+                         "razor-thin sliver around hover in raw terms")
+    ap.add_argument("--noise", type=float, default=None,
+                    help="demo noise (default 0.05 residual / 0.01 direct); in "
+                         "direct mode it is applied only before the last "
+                         "--noise-tail steps, since the descent has no margin")
     ap.add_argument("--noise-tail", type=int, default=300)
     ap.add_argument("--bc-epochs", type=int, default=40)
     ap.add_argument("--bc-lr", type=float, default=1e-3)
@@ -699,12 +1004,37 @@ def main():
     ap.add_argument("--bc-alpha", type=float, default=2.5,
                     help="TD3+BC RL/BC balance; lower holds tighter to the "
                          "demonstrations (0 = pure behavior cloning)")
-    ap.add_argument("--explore-noise", type=float, default=0.005,
-                    help="TD3 exploration sigma; the touchdown tolerates very "
-                         "little (0.01 never soft-lands)")
-    ap.add_argument("--gamma", type=float, default=0.99)
-    ap.add_argument("--lr", type=float, default=1e-4,
-                    help="TD3 learning rate (low to protect the BC init)")
+    ap.add_argument("--explore-noise", type=float, default=None,
+                    help="TD3 exploration sigma (default 0.05 residual / 0.005 "
+                         "direct); the touchdown tolerates very little raw "
+                         "action noise, and the residual scales it down")
+    ap.add_argument("--reward-scale", type=float, default=5.0,
+                    help="magnitude of the terminal bonus/penalty against a "
+                         "dense term bounded by 1")
+    ap.add_argument("--descent-shape-w", type=float, default=None,
+                    help="weight of the dense soft-descent gradient (default "
+                         "2.0 for --orbit, 0 otherwise); makes 'stay landable' "
+                         "a followable gradient so the actor need not stumble "
+                         "onto a soft touchdown")
+    ap.add_argument("--policy-delay", type=int, default=2,
+                    help="critic updates per actor update; raise to let the "
+                         "critic settle before the actor chases it")
+    ap.add_argument("--gamma", type=float, default=0.999,
+                    help="the landing window is ~500 steps, so at 0.99 the "
+                         "terminal reward is discounted to ~0.007 by the start "
+                         "of the window and only the dense term is visible")
+    ap.add_argument("--bc-weight", type=float, default=None,
+                    help="weight on the BC term during training (default 0 "
+                         "residual / 1 direct); in residual mode the demos are "
+                         "zero residuals, so any weight here penalizes acting")
+    ap.add_argument("--bc-lambda-max", type=float, default=10.0,
+                    help="ceiling on the RL/BC balance term; only meant to "
+                         "survive the untrained-critic startup, so keep it "
+                         "well above bc_alpha/mean|Q|")
+    ap.add_argument("--lr", type=float, default=None,
+                    help="learning rate (default 3e-4 residual / 1e-4 direct; "
+                         "direct mode keeps it low to protect a fragile clone, "
+                         "while the residual bound protects the landing itself)")
     ap.add_argument("--batch-size", type=int, default=512)
     ap.add_argument("--buffer-size", type=int, default=500_000)
     ap.add_argument("--learning-starts", type=int, default=500)
@@ -714,43 +1044,143 @@ def main():
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--out", default=None)
     ap.add_argument("--eval", type=int, default=0)
-    ap.add_argument("--watch", default=None)
+    ap.add_argument("--watch", default=None,
+                    help="model to evaluate; opens a render window unless "
+                         "--no-render (headless jobs must pass it)")
+    ap.add_argument("--no-render", action="store_true",
+                    help="evaluate without opening a window")
     args = ap.parse_args()
+
+    global SUCCESS_BONUS, FAILURE_PENALTY, DESCENT_SHAPE_W
+    SUCCESS_BONUS = FAILURE_PENALTY = args.reward_scale
+    if args.descent_shape_w is None:
+        args.descent_shape_w = 2.0 if args.orbit else 0.0
+    DESCENT_SHAPE_W = args.descent_shape_w
+    # the residual scales the policy's authority down, so its noise budget is
+    # correspondingly larger to land in the same effective range
+    if args.noise is None:
+        args.noise = 0.05 if args.residual else 0.01
+    if args.explore_noise is None:
+        args.explore_noise = 0.05 if args.residual else 0.005
+    if args.lr is None:
+        args.lr = 3e-4 if args.residual else 1e-4
+    if args.bc_weight is None:
+        args.bc_weight = 0.0 if args.residual else 1.0
+
+    site_radius = args.site_radius
+    if site_radius is None:
+        site_radius = ToMoonEnv().moon_site_radius
+
+    if args.orbit:
+        # Orbit-first: the autopilot parks in a low moon orbit and lands on the
+        # site from there; the policy learns the from-orbit segment (deorbit
+        # timing + descent) direct, over the WHOLE moon.
+        if args.max_steps < 2000:
+            args.max_steps = 2500  # room to coast up to an orbit, then descend
+        hover = not args.no_hover
+        print(f"[1/5] caching the orbit-first expert (park -> deorbit -> land)"
+              f"{'  [hover control]' if hover else '  [raw throttle]'}")
+        actions, n_pre, oinfo = orbit_expert(hover_control=hover)
+        print(f"      expert episode {len(actions)} steps; parks in orbit at "
+              f"{n_pre}; policy flies the last {len(actions) - n_pre}; "
+              f"expert landed {oinfo['termination']} at "
+              f"{oinfo['moon_rel_speed']:.1f} m/s")
+        center, arc = 0.0, math.pi  # goals span the entire moon
+        sites = list(np.linspace(-math.pi, math.pi, args.demos, endpoint=False))
+        print(f"[2/5] flying {args.demos} orbit demos across the whole moon")
+        trans, bc_obs, bc_act, bearings, softs = collect_orbit_demos(
+            n_pre, site_radius, args.max_steps, sites, seed=0, hover_control=hover)
+        attempts = args.demos
+        n_trans = sum(len(t) for t in trans)
+        print(f"      {softs}/{attempts} landed softly; {n_trans} buffer "
+              f"transitions, {len(bc_act)} BC pairs")
+
+        def make_env(render_mode=None, seed=None):
+            return GoalMoonEnv(actions, 0.0, center, arc, args.max_steps,
+                               site_radius=site_radius, render_mode=render_mode,
+                               seed=seed, n_pre=n_pre, env_max_steps=ORBIT_ENV_STEPS,
+                               hover_control=hover)
+
+        _run_training(args, make_env, trans, bc_obs, bc_act)
+        return
 
     print("[1/5] caching the expert approach")
     actions = expert_actions()
     n_pre = int(args.handoff * len(actions))
-    site_radius = args.site_radius
-    if site_radius is None:
-        site_radius = ToMoonEnv().moon_site_radius
     print(f"      expert episode {len(actions)} steps; handoff at {n_pre}; "
           f"policy flies the last {len(actions) - n_pre}; "
           f"success radius {site_radius / 1000:.1f} km")
 
-    print(f"[2/5] flying {args.demos} expert demos "
-          f"(approach noise {args.noise}, clean tail {args.noise_tail})")
-    trans, bc_obs, bc_act, center, arc, bearings, attempts = collect_demos(
-        n_pre, args.max_steps, site_radius, args.demos, args.noise,
-        args.noise_tail, len(actions), 0, args.arc_margin, args.site_arc)
+    mode = "residual" if args.residual else "direct"
+    print(f"[2/5] collecting {args.demos} demos ({mode}, noise {args.noise})")
+    if args.residual:
+        # Pass 1: fly with a provisional arc purely to see where the autopilot
+        # puts the touchdown, then set the goal arc to that measured span.
+        prov_arc = args.site_arc if args.site_arc is not None else 0.35
+        probe = ResidualGoalMoonEnv(actions, args.handoff,
+                                    natural_touchdown_bearing(), prov_arc,
+                                    args.max_steps, site_radius=site_radius,
+                                    seed=0, residual_scale=args.residual_scale)
+        *_, bearings, softs = collect_residual_demos(probe, args.demos,
+                                                     args.noise, seed=0)
+        if not bearings:
+            raise SystemExit("no soft residual demos; lower --noise")
+        # Center on where the autopilot actually puts it, but do NOT derive the
+        # arc from the demo scatter: the approach is snapshotted, so zero-mean
+        # residual noise cancels out and the touchdown barely moves (~0.1 deg),
+        # which would make the goal arc degenerate and the task trivial. A
+        # deliberate correction reaches much further than noise does -- a
+        # constant bias alone shifts it ~0.5 deg while staying soft, and more
+        # if spent at the right moments. So the arc is a stated target the
+        # policy has to learn to reach, wider than the site radius on purpose.
+        center = math.atan2(float(np.mean(np.sin(bearings))),
+                            float(np.mean(np.cos(bearings))))
+        arc = args.site_arc if args.site_arc is not None else RESIDUAL_ARC
+        # Pass 2: the real demos, with goals drawn from the reachable arc
+        probe.set_site_arc(center, arc)
+        trans, bc_obs, bc_act, bearings, softs = collect_residual_demos(
+            probe, args.demos, args.noise, seed=1)
+        probe.close()
+        attempts = args.demos
+    else:
+        trans, bc_obs, bc_act, center, arc, bearings, attempts = collect_demos(
+            n_pre, args.max_steps, site_radius, args.demos, args.noise,
+            args.noise_tail, len(actions), 0, args.arc_margin, args.site_arc)
+        softs = len(trans)
     n_trans = sum(len(t) for t in trans)
-    print(f"      {len(trans)}/{attempts} landed softly; {n_trans} buffer "
-          f"transitions, {len(bc_act)} BC pairs (all flights)")
+    print(f"      {softs}/{attempts} landed softly; {n_trans} buffer "
+          f"transitions, {len(bc_act)} BC pairs")
     print(f"      goal arc derived from touchdowns: center "
           f"{math.degrees(center):+.2f} deg +/- {math.degrees(arc):.2f} deg "
           f"({arc * ToMoonEnv().moon.radius / 1000:.1f} km of surface)")
 
+    def make_env(render_mode=None, seed=None):
+        if args.residual:
+            return ResidualGoalMoonEnv(actions, args.handoff, center, arc,
+                                       args.max_steps, site_radius=site_radius,
+                                       render_mode=render_mode, seed=seed,
+                                       residual_scale=args.residual_scale)
+        return GoalMoonEnv(actions, args.handoff, center, arc, args.max_steps,
+                           site_radius=site_radius, render_mode=render_mode,
+                           seed=seed)
+
+    _run_training(args, make_env, trans, bc_obs, bc_act)
+
+
+def _run_training(args, make_env, trans, bc_obs, bc_act) -> None:
+    """Seed the HER buffer, behavior-clone the actor, warm the critic, then run
+    TD3+BC. Shared by every mode (orbit / direct / residual); or, with --eval,
+    just roll the saved policy."""
     if args.eval:
         model_path = args.watch or args.out
         if not model_path:
             raise SystemExit("--eval needs a model: --watch models/<run>.zip")
-        evaluate(model_path, args.eval, args.device, args.handoff, center, arc,
-                 args.max_steps, site_radius, actions, watch=bool(args.watch))
+        evaluate(model_path, args.eval, args.device, make_env,
+                 watch=bool(args.watch) and not args.no_render)
         return
 
-    def _thunk():
-        return Monitor(GoalMoonEnv(actions, args.handoff, center, arc,
-                                   args.max_steps, site_radius=site_radius))
-    vec = DummyVecEnv([_thunk])
+    n_trans = sum(len(t) for t in trans)
+    vec = DummyVecEnv([lambda: Monitor(make_env())])
     n_act = int(vec.action_space.shape[0])
 
     print("[3/5] building TD3 + HER (goal-conditioned, hindsight relabeling)")
@@ -772,11 +1202,14 @@ def main():
         learning_starts=args.learning_starts,
         train_freq=1,
         gradient_steps=1,
+        policy_delay=args.policy_delay,
         device=args.device,
         seed=0,
         verbose=0,
     )
     model.bc_alpha = args.bc_alpha
+    model.bc_lambda_max = args.bc_lambda_max
+    model.bc_weight = args.bc_weight
 
     for episode in trans:
         for o, no, a, r, d, i in episode:
@@ -792,8 +1225,7 @@ def main():
     bc_pretrain(model, bc_obs, bc_act, args.bc_epochs, lr=args.bc_lr)
     model.set_demos(bc_obs, bc_act)  # keep the anchor on the demos, not the buffer
     print("      BC policy, flown solo on random goals:")
-    evaluate(None, 5, args.device, args.handoff, center, arc, args.max_steps,
-             site_radius, actions, model=model)
+    evaluate(None, 5, args.device, make_env, model=model)
 
     if args.critic_warmup > 0:
         print(f"      warming the critic on the seeded landings "
@@ -815,8 +1247,7 @@ def main():
         model.save(out)
         if args.eval_every > 0 and remaining >= 0:
             print(f"  [eval @ {done_steps:,} steps]")
-            evaluate(None, args.eval_episodes, args.device, args.handoff, center,
-                     arc, args.max_steps, site_radius, actions, model=model)
+            evaluate(None, args.eval_episodes, args.device, make_env, model=model)
     model.save(out)
     print(f"saved {out}.zip -- evaluate with:\n"
           f"  python scripts/train_her.py --eval 20 --watch {out}.zip")

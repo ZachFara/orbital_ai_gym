@@ -8,7 +8,17 @@ reward is to be moving sideways fast enough to orbit -- the reward function
 teaches the gravity turn by itself.
 
 Action space (Box, [-1, 1]), with attitude_control=True (the default):
-    a[0]     throttle command, mapped to [0, 1]
+    a[0]     throttle command, mapped to [0, 1] -- OR, with hover_control=True,
+             a hover-relative command: throttle = hover * exp(a[0] * HOVER_K),
+             so a[0]=0 is exactly the throttle that cancels local gravity (a
+             free hover) and a[0] is symmetric decelerate/descend about it.
+
+             This matters on the high-thrust upper stage: hover throttle is
+             ~0.11 there (thrust-to-weight ~9), so with raw throttle the entire
+             soft landing lives in a razor-thin band and any action noise is a
+             crash. Centering the action on hover puts the safe touchdown at a
+             fixed, learnable a[0]=0 regardless of thrust-to-weight, which is
+             what makes the knife-edge landing learnable at all.
     a[1:3]   desired thrust DIRECTION in the local frame (radial, tangential);
              the env slews the attitude toward it at up to max_turn_rate. A
              near-zero vector holds the current attitude.
@@ -103,6 +113,7 @@ def _elements(mu: float, body_radius: float, rx: float, ry: float,
 class TwoStageToOrbitEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
     OBS_SIZE = 9  # subclasses that append observations override this
+    HOVER_K = 3.0  # hover_control action gain: a[0]=+-1 is exp(+-3) ~ 20x/0.05x hover
 
     def __init__(
         self,
@@ -121,6 +132,7 @@ class TwoStageToOrbitEnv(gym.Env):
         crash_speed: float = 5.0,
         terminate_on_orbit: bool = False,
         attitude_control: bool = True,
+        hover_control: bool = False,
         render_mode: str | None = None,
     ):
         self.planet = PLANETS[planet] if isinstance(planet, str) else planet
@@ -142,6 +154,7 @@ class TwoStageToOrbitEnv(gym.Env):
         self.crash_speed = crash_speed
         self.terminate_on_orbit = terminate_on_orbit
         self.attitude_control = attitude_control
+        self.hover_control = hover_control
 
         self.v_ref = self.planet.circular_velocity(self.planet.space_altitude)
 
@@ -181,7 +194,17 @@ class TwoStageToOrbitEnv(gym.Env):
     def step(self, action):
         assert self._terminal is None, "step() called on a finished episode; call reset()"
         a = np.asarray(action, dtype=np.float64).flatten()
-        throttle = float(np.clip((a[0] + 1.0) * 0.5, 0.0, 1.0))
+        if self.hover_control:
+            # a[0]=0 is hover; the exp mapping can't reach a true zero, so the
+            # bottom of the range is an explicit engine-off (coast) deadzone
+            a0 = float(a[0])
+            if a0 <= -0.98:
+                throttle = 0.0
+            else:
+                throttle = float(np.clip(
+                    self.hover_throttle() * math.exp(a0 * self.HOVER_K), 0.0, 1.0))
+        else:
+            throttle = float(np.clip((a[0] + 1.0) * 0.5, 0.0, 1.0))
         max_rate = self.rocket.max_turn_rate
         turn_rate = 0.0
         if self.attitude_control:
@@ -414,6 +437,21 @@ class TwoStageToOrbitEnv(gym.Env):
 
     def _altitude(self) -> float:
         return math.hypot(self._rx, self._ry) - self.planet.radius
+
+    def _gravity_mag(self) -> float:
+        """Magnitude of the total local gravitational acceleration (planet plus
+        any mission body, e.g. the moon). This is what a hover must cancel."""
+        rn = math.hypot(self._rx, self._ry)
+        gp = -self.planet.mu / (rn * rn * rn)
+        gx, gy = gp * self._rx, gp * self._ry
+        ex, ey = self._extra_acceleration(self._rx, self._ry, self._vx, self._vy)
+        return math.hypot(gx + ex, gy + ey)
+
+    def hover_throttle(self) -> float:
+        """Throttle that cancels local gravity at full thrust-vector alignment.
+        The neutral point of hover_control (a[0]=0)."""
+        a_max = self.rocket.stages[self._stage].thrust / self._mass
+        return min(1.0, self._gravity_mag() / a_max) if a_max > 0.0 else 1.0
 
     def _local_frame(self):
         """Unit vectors: radial (up) and tangential ("east", +x at the pad)."""

@@ -30,6 +30,17 @@ from orbital_gym.missions.orbit_and_return import OrbitAndReturnEnv
 from orbital_gym.missions.to_moon import ToMoonEnv
 
 
+def _throttle_action(env, throttle: float) -> float:
+    """Map a desired throttle to the a[0] the env expects. With hover_control
+    the action is hover-relative (throttle = hover * exp(a[0]*K)), so invert
+    that; otherwise it is the plain [0,1] -> [-1,1]. Shared by every autopilot."""
+    if getattr(env, "hover_control", False):
+        hover = max(1e-4, env.hover_throttle())
+        a0 = math.log(max(1e-4, throttle) / hover) / env.HOVER_K
+        return float(np.clip(a0, -1.0, 1.0))
+    return 2.0 * throttle - 1.0
+
+
 class Autopilot:
     """ascend -> coast -> insert -> done.
 
@@ -99,11 +110,11 @@ class Autopilot:
         if env.attitude_control:
             # pitch is elevation above the local horizon, so the desired
             # direction is sin(pitch) radial + cos(pitch) tangential
-            return np.array([2.0 * throttle - 1.0, math.sin(pitch), math.cos(pitch)],
+            return np.array([_throttle_action(self.env, throttle),math.sin(pitch), math.cos(pitch)],
                             dtype=np.float32)
         err = _wrap_pi(pitch - math.radians(info["pitch_deg"]))
         turn = np.clip(err / (env.rocket.max_turn_rate * env.step_duration), -1.0, 1.0)
-        return np.array([2.0 * throttle - 1.0, turn], dtype=np.float32)
+        return np.array([_throttle_action(self.env, throttle),turn], dtype=np.float32)
 
 
 class ReturnAutopilot(Autopilot):
@@ -212,9 +223,47 @@ class MoonAutopilot:
                            # the radial gap)
     GATE_ALT = 4_000.0     # descend handoff altitude scale, m
     SITE_REACH = 30_000.0  # only steer for the site when within this, m
+    # -- site targeting (the "divert"). The touchdown longitude is the
+    # periapsis of the moon-relative approach, fixed by the transfer, so the
+    # terminal descent's ~30 km fine-steering cannot cover the ~290 km the raw
+    # approach misses the site by. The fix is to aim the approach itself, high
+    # and far out where a small cross-track burn has a long lever arm and there
+    # is no retro burn to steal thrust from; below HANDOFF_ALT the normal
+    # brake+descend lands, now with the site inside its reach.
+    HANDOFF_ALT = 120_000.0   # aim above this, brake/land below, m
+    DIVERT_N = 3.0            # ZEM cross-track navigation gain
+    DIVERT_CAP = 0.4         # max fraction of thrust spent aiming
+    DIVERT_DEADBAND = 4_000.0  # stop aiming once predicted miss is under this, m
+    DIVERT_BUDGET = 2_500.0   # delta-v ceiling on aiming, m/s: past it, stop and
+                              # land soft where we are rather than run the tank
+                              # dry braking (a soft off-site landing beats a crash)
+    # -- orbit-first capture (opt-in). Rather than a direct suicide descent, the
+    # vehicle brakes into a low circular parking orbit; from there the landing
+    # site is reachable by choosing WHEN to deorbit (KSP-style), which turns
+    # site targeting from a thrust-saturated cross-track fight into a clean
+    # timing decision -- the shape the RL problem needs.
+    CAPTURE_ALT = 140_000.0  # begin the capture burn at this moon altitude, m
+    PARK_ALT = 60_000.0      # target circular parking-orbit altitude, m
+    DEORBIT_LEAD = 0.20      # deorbit when the site is this far ahead in the
+                             # orbit (rad); the descent then lands on it. Measured
+                             # constant across sites (one value hits -90..+150 deg
+                             # on-site) -- it is a property of the descent
+                             # geometry, so the SAME wait hits any site.
+    DEORBIT_PERI = -40_000.0  # burn retrograde until periapsis drops to here, m
 
-    def __init__(self, env: ToMoonEnv):
+    def __init__(self, env: ToMoonEnv, divert: bool = False, orbit: bool = False):
         self.env = env
+        # Orbit-first is opt-in: off, the pilot flies the frozen direct-descent
+        # baseline. On, it captures into a low circular moon orbit before the
+        # descent -- the setup the from-orbit RL landing trains against.
+        self.orbit = orbit
+        # Site targeting is opt-in: off, the pilot is the frozen soft-landing
+        # baseline every test, train_guided cache, and default flight relies on
+        # (lands ~290 km off site at 8 m/s). On, it aims the approach at the
+        # env's site during the coast. It reaches sites within a cone of the
+        # natural landing; far sites (e.g. the preset 0 deg) are out of reach
+        # and it lands soft where it can.
+        self.enable_divert = divert
         self.mode = "ascend"
         p = env.planet
         self.peri_target = self.PERI_FRAC * p.space_altitude
@@ -223,6 +272,7 @@ class MoonAutopilot:
         self._ra_target = 0.0
         self._burning = False
         self._trim = False
+        self._dv_at_divert = None  # delta-v when aiming began (budget tracking)
 
     # -- state helpers (world frame; the moon is on rails, so its state is
     # a closed-form function of time)
@@ -254,10 +304,10 @@ class MoonAutopilot:
             # project the desired world direction onto the local frame
             ux, uy, tx, ty = e._local_frame()
             wx, wy = math.cos(theta), math.sin(theta)
-            return np.array([2.0 * throttle - 1.0, wx * ux + wy * uy, wx * tx + wy * ty],
+            return np.array([_throttle_action(self.env, throttle),wx * ux + wy * uy, wx * tx + wy * ty],
                             dtype=np.float32)
         turn = np.clip(err / (e.rocket.max_turn_rate * e.step_duration), -1.0, 1.0)
-        return np.array([2.0 * throttle - 1.0, turn], dtype=np.float32)
+        return np.array([_throttle_action(self.env, throttle),turn], dtype=np.float32)
 
     def _act_elev(self, elev: float, throttle: float, u, tw, gate=None):
         d = math.cos(elev) * tw + math.sin(elev) * u
@@ -373,13 +423,21 @@ class MoonAutopilot:
 
         if self.mode == "transfer":
             if d < 6.0 * moon.radius:
-                self.mode = "brake"
+                self.mode = "capture" if self.orbit else "brake"
             else:
-                return self._act_elev(prograde, 0.0, u, tw)
+                div = self._divert(prel, vrel, d)
+                return div if div is not None else \
+                    self._act_elev(prograde, 0.0, u, tw)
+
+        if self.mode in ("capture", "moon_orbit", "deorbit", "pdescend"):
+            return self._orbit_control(prel, vrel, d)
 
         if self.mode == "brake":
             malt = d - moon.radius
             speed = float(np.linalg.norm(vrel))
+            div = self._divert(prel, vrel, d)
+            if div is not None:
+                return div
             if (speed < 70.0 and malt < 8.0 * self.GATE_ALT) \
                     or malt < 1.2 * self.GATE_ALT:
                 self.mode = "descend"
@@ -387,6 +445,162 @@ class MoonAutopilot:
                 return self._brake(info, prel, vrel, d)
 
         return self._descend(info, prel, vrel, d)
+
+    def _orbit_control(self, prel, vrel, d: float) -> np.ndarray:
+        """Capture into, then hold, a low circular moon orbit.
+
+        On the incoming hyperbolic approach the vehicle coasts (pointed
+        retrograde, ready) until it drops to CAPTURE_ALT, then runs an
+        injection controller in the moon frame: null the radial velocity while
+        driving the tangential speed to circular at PARK_ALT. Centripetal and
+        gravity terms are fed forward so the throttle-down doesn't drop the
+        altitude. Once radial velocity is killed and the speed is circular with
+        periapsis clear of the surface, it switches to a coasting hold -- the
+        parking orbit the RL landing takes over from.
+        """
+        e = self.env
+        moon = e.moon
+        um = prel / d
+        tm = np.array([-um[1], um[0]])  # +90 deg: CCW tangential
+        v_r = float(vrel @ um)
+        v_t = float(vrel @ tm)
+        sgn = 1.0 if v_t >= 0.0 else -1.0  # keep the approach's orbital sense
+        malt = d - moon.radius
+        g_m = moon.mu / (d * d)
+        v_circ = math.sqrt(moon.mu / d)
+        a_av = self._accel_avail_moon()
+        peri, apo, energy, ecc = e._moon_orbit_elements()
+
+        if self.mode == "capture":
+            # coast in retrograde until low enough to start the capture burn
+            if malt > self.CAPTURE_ALT and v_r < 0.0:
+                return self._act_world(math.atan2(-vrel[1], -vrel[0]), 0.0)
+            if abs(v_r) < 12.0 and abs(v_t - sgn * v_circ) < 20.0 and peri > 0.0:
+                self.mode = "moon_orbit"
+
+        if self.mode == "moon_orbit":
+            # deorbit when the site sits the right lead-angle ahead in the orbit
+            theta_v = math.atan2(prel[1], prel[0])
+            site_world = e._moon_angle() + e._site_angle
+            ahead = sgn * _wrap_pi(site_world - theta_v)  # +: site ahead of us
+            if 0.0 < ahead <= self.DEORBIT_LEAD:
+                self.mode = "deorbit"
+            elif peri > 0.5 * self.PARK_ALT and ecc < 0.08:
+                # hold: only trim if the orbit has decayed (tide, sloppy capture)
+                return self._act_world(math.atan2(-vrel[1], -vrel[0]), 0.0)
+
+        if self.mode == "deorbit":
+            if peri > self.DEORBIT_PERI:  # burn retrograde to drop periapsis
+                return self._act_world(math.atan2(-vrel[1], -vrel[0]), 1.0, gate=0.4)
+            self.mode = "pdescend"  # periapsis below surface: powered descent
+
+        if self.mode == "pdescend":
+            return self._pdescend(prel, vrel, d)
+
+        # injection burn: v_r -> a gentle altitude-hold target, v_t -> circular
+        vr_des = max(-25.0, min(25.0, 0.05 * (self.PARK_ALT - malt)))
+        a_r = g_m - v_t * v_t / d + 0.6 * (vr_des - v_r)  # gravity + centripetal
+        a_t = 0.7 * (sgn * v_circ - v_t)
+        a_cmd = a_r * um + a_t * tm
+        mag = float(np.linalg.norm(a_cmd))
+        return self._act_world(math.atan2(a_cmd[1], a_cmd[0]),
+                               min(1.0, mag / a_av), gate=0.6)
+
+    def _pdescend(self, prel, vrel, d: float) -> np.ndarray:
+        """Powered descent from the deorbit, landing soft.
+
+        The hyperbolic-approach brake/descend overshoots here -- it nearly
+        stops the vehicle kilometres up, then hovers the tank dry. From orbit
+        the right law is one continuous braking arc: ride a suicide-burn
+        profile on TOTAL moon-relative speed (v <= sqrt(2*a_net*altitude)),
+        thrust retrograde so the same burn kills the ~1 km/s of horizontal
+        velocity and the descent together, and blend in radial support near the
+        ground so the last hundred metres are gentle rather than a dive.
+        """
+        m = self.env.moon
+        um = prel / d
+        tm = np.array([-um[1], um[0]])
+        malt = d - m.radius
+        v = float(np.linalg.norm(vrel))
+        vhat = vrel / max(1.0, v)
+        a_av = self._accel_avail_moon()
+        g_m = m.mu / (d * d)
+        v_r = float(vrel @ um)      # radial velocity (negative descending)
+        v_t = float(vrel @ tm)
+
+        # max speed we can still bleed to zero by the surface, with margin
+        a_net = max(0.5, 0.85 * a_av - g_m)
+        v_prof = math.sqrt(2.0 * a_net * max(0.0, malt))
+
+        if malt < 150.0:
+            # terminal: null horizontal, settle down at a few m/s
+            vr_des = -min(3.0, 0.05 * malt + 1.0)
+            a_r = g_m + 0.8 * (vr_des - v_r)
+            a_t = -0.8 * v_t
+            a_cmd = a_r * um + a_t * tm
+            return self._act_world(math.atan2(a_cmd[1], a_cmd[0]),
+                                   min(1.0, float(np.linalg.norm(a_cmd)) / a_av),
+                                   gate=0.6)
+
+        if v > 0.9 * v_prof:
+            # on/above the profile: brake retrograde at full thrust, with just
+            # enough radial support that the vertical rate can't run away
+            support = max(0.0, g_m - v * v / d)
+            retro = math.sqrt(max(1.0, a_av * a_av - support * support))
+            a_cmd = -vhat * retro + um * support
+            return self._act_world(math.atan2(a_cmd[1], a_cmd[0]), 1.0, gate=0.5)
+
+        # under the profile: coast down at a controlled sink, holding attitude
+        vr_des = -max(5.0, 0.5 * v_prof)
+        a_r = max(0.0, g_m + 0.6 * (vr_des - v_r))
+        a_t = -0.6 * v_t
+        a_cmd = a_r * um + a_t * tm
+        return self._act_world(math.atan2(a_cmd[1], a_cmd[0]),
+                               min(1.0, float(np.linalg.norm(a_cmd)) / a_av),
+                               gate=0.6)
+
+    def _divert(self, prel, vrel, d: float):
+        """Aim the coasting approach at the site with ZEM cross-track guidance.
+
+        Returns an action while a correction is worth making, or None to fall
+        through to the normal coast/brake. Zero-effort-miss: project where the
+        approach will be at closest approach, compare to where the site will
+        be, and burn the cross-track component away. It self-tapers -- as the
+        predicted miss shrinks the burn shrinks -- and stops entirely inside
+        the deadband, so it costs only the delta-v the aim actually needs.
+        """
+        e = self.env
+        if not self.enable_divert or self._burning \
+                or (d - e.moon.radius) < self.HANDOFF_ALT:
+            return None
+        dv_now = e.delta_v_remaining()
+        if self._dv_at_divert is None:
+            self._dv_at_divert = dv_now
+        if self._dv_at_divert - dv_now > self.DIVERT_BUDGET:
+            return None  # spent the aiming budget: keep the rest for landing
+        pv = float(prel @ vrel)
+        if pv >= 0.0:  # past closest approach / not approaching: nothing to aim
+            return None
+        vv = max(1.0, float(vrel @ vrel))
+        t_go = max(2.0, -pv / vv)
+        vhat = vrel / math.sqrt(vv)
+        mpos = np.array(e._moon_world())
+        site_rel = np.array(e._moon_site_world()) - mpos
+        zem = site_rel - (prel + vrel * t_go)
+        zem_lat = zem - float(zem @ vhat) * vhat
+        if float(np.linalg.norm(zem_lat)) < self.DIVERT_DEADBAND:
+            return None
+        a_av = self._accel_avail_moon()
+        a_lat = self.DIVERT_N * zem_lat / (t_go * t_go)
+        mag = float(np.linalg.norm(a_lat))
+        if mag > self.DIVERT_CAP * a_av:
+            a_lat *= self.DIVERT_CAP * a_av / mag
+            mag = self.DIVERT_CAP * a_av
+        return self._act_world(math.atan2(a_lat[1], a_lat[0]),
+                               min(1.0, mag / a_av), gate=0.6)
+
+    def _accel_avail_moon(self) -> float:
+        return self.env.rocket.stages[self.env._stage].thrust / self.env._mass
 
     def _brake(self, info: dict, prel, vrel, d: float) -> np.ndarray:
         """Moon-relative retro suicide burn, as late as possible.
