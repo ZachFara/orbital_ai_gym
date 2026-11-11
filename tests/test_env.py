@@ -1,16 +1,15 @@
 import math
 
+import gymnasium as gym
 import numpy as np
 import pytest
-import gymnasium as gym
 from gymnasium.utils.env_checker import check_env
 
-import orbital_gym
-from orbital_gym.presets import G0, PLANETS, ROCKETS, stage_delta_v, total_delta_v
 from orbital_gym.missions.to_orbit import TwoStageToOrbitEnv
+from orbital_gym.presets import G0, ROCKETS, stage_delta_v, total_delta_v
 
-IDLE = np.array([-1.0, 0.0, 0.0], dtype=np.float32)   # throttle 0, hold attitude
-BURN = np.array([1.0, 0.0, 0.0], dtype=np.float32)    # full throttle, hold attitude
+IDLE = np.array([-1.0, 0.0, 0.0], dtype=np.float32)  # throttle 0, hold attitude
+BURN = np.array([1.0, 0.0, 0.0], dtype=np.float32)  # full throttle, hold attitude
 
 
 def test_gymnasium_api_conformance():
@@ -40,11 +39,14 @@ def test_vertical_climb_reward_matches_altitude():
     _, info = env.reset()
     total = 0.0
     for _ in range(60):
-        _, r, *_ , info = env.step(BURN)
+        _, r, *_, info = env.step(BURN)
         total += r
     assert info["altitude"] > 3_000.0
-    expected = env.climb_reward * min(info["altitude"], env.planet.space_altitude) \
+    expected = (
+        env.climb_reward
+        * min(info["altitude"], env.planet.space_altitude)
         / env.planet.space_altitude
+    )
     assert total == pytest.approx(expected, rel=1e-6)
 
 
@@ -84,9 +86,9 @@ def test_orbit_energy_conserved_without_thrust():
     env._teleport(0.0, p.radius + alt, v, 0.0)
     energy0 = env._orbit_elements()[2]
     for _ in range(1900):  # just over one full orbit
-        _, r, terminated, truncated, info = env.step(IDLE)
+        _, _r, terminated, _truncated, info = env.step(IDLE)
         assert not terminated
-    peri, apo, energy, ecc = env._orbit_elements()
+    peri, apo, energy, _ecc = env._orbit_elements()
     assert abs(energy - energy0) / abs(energy0) < 0.005
     assert peri == pytest.approx(alt, rel=0.02)
     assert apo == pytest.approx(alt, rel=0.02)
@@ -155,7 +157,7 @@ def test_crash_penalty_and_termination():
     env._teleport(0.0, p.radius + 3_000.0, 0.0, -200.0)
     total, terminated, info = 0.0, False, None
     for _ in range(60):
-        _, r, terminated, truncated, info = env.step(IDLE)
+        _, r, terminated, _truncated, info = env.step(IDLE)
         total += r
         if terminated:
             break

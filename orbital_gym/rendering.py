@@ -94,16 +94,15 @@ class Renderer:
 
         rng = random.Random(7)
         self.stars = [
-            (rng.uniform(0, W), rng.uniform(0, H), rng.choice((1, 1, 1, 2)))
-            for _ in range(130)
+            (rng.uniform(0, W), rng.uniform(0, H), rng.choice((1, 1, 1, 2))) for _ in range(130)
         ]
         # surface features near the pad: (arc offset m, half-width m, height m)
         self.hills = [
             (o, rng.uniform(250.0, 900.0), rng.uniform(40.0, 150.0))
             for o in (rng.uniform(-30000.0, 30000.0) for _ in range(34))
         ]
-        self._span = None   # smoothed view half-width, m
-        self._blend = 0.0   # smoothed rocket-view -> map-view factor
+        self._span = None  # smoothed view half-width, m
+        self._blend = 0.0  # smoothed rocket-view -> map-view factor
         self._fblend = 0.0  # smoothed planet-focus -> moon-focus factor
 
     # --- camera ---------------------------------------------------------------
@@ -128,7 +127,7 @@ class Renderer:
         p = env.planet
         c = p.space_altitude
         alt = max(0.0, env._altitude())
-        peri, apo, energy, _ = env._orbit_elements()
+        peri, apo, _energy, _ = env._orbit_elements()
         apo_eff = min(apo if math.isfinite(apo) else 3.0 * p.radius, 3.0 * p.radius)
 
         # Pull out to the whole-planet map view only once the trajectory is
@@ -163,7 +162,7 @@ class Renderer:
             self._fblend = want_f  # first frame ever: start converged
             self._focus_name = soi
         elif getattr(self, "_focus_name", soi) != soi and soi != "planet":
-            self._fblend = 0.0     # new focus body: glide out from the planet view
+            self._fblend = 0.0  # new focus body: glide out from the planet view
             self._focus_name = soi
         else:
             self._fblend += (want_f - self._fblend) * 0.06
@@ -291,8 +290,7 @@ class Renderer:
             s = self._to_screen(0.0, R, cam)
             if self._on_screen(s, margin=0):
                 pg.draw.circle(self.surf, PAD, s, 3)
-                self.surf.blit(self.font_small.render("pad", True, TEXT_DIM),
-                               (s[0] + 6, s[1] - 6))
+                self.surf.blit(self.font_small.render("pad", True, TEXT_DIM), (s[0] + 6, s[1] - 6))
             return
 
         def at(arc_m, up_m):
@@ -308,8 +306,7 @@ class Renderer:
         deck = [at(-70, 4), at(70, 4), at(70, -24), at(-70, -24)]
         if any(self._on_screen(t, margin=200) for t in deck):
             pg.draw.polygon(self.surf, PAD, deck)
-            pg.draw.polygon(self.surf, PAD_DARK,
-                            [at(-58, 64), at(-46, 64), at(-46, 4), at(-58, 4)])
+            pg.draw.polygon(self.surf, PAD_DARK, [at(-58, 64), at(-46, 64), at(-46, 4), at(-58, 4)])
 
     # --- trajectory -------------------------------------------------------------
 
@@ -348,8 +345,7 @@ class Renderer:
         h = rx * vy - ry * vx
         p_semi = h * h / mu
         peri_alt = p_semi / (1.0 + e) - body_r if e > 1e-9 else r - body_r
-        pe = (bx + (peri_alt + body_r) * math.cos(w),
-              by + (peri_alt + body_r) * math.sin(w))
+        pe = (bx + (peri_alt + body_r) * math.cos(w), by + (peri_alt + body_r) * math.sin(w))
 
         if energy < 0.0 and e <= 0.985:
             a = -mu / (2.0 * energy)
@@ -382,8 +378,7 @@ class Renderer:
             rr = p_semi / (1.0 + e * math.cos(nu))
             if rr < 0.0 or rr > 1.05 * r_lim:
                 break
-            pts.append((bx + rr * math.cos(w + sgn * nu),
-                        by + rr * math.sin(w + sgn * nu)))
+            pts.append((bx + rr * math.cos(w + sgn * nu), by + rr * math.sin(w + sgn * nu)))
             if rr < body_r:
                 break  # ends at the surface: no ghost path out the far side
         if len(pts) < 2:
@@ -462,8 +457,9 @@ class Renderer:
             site = self._to_screen(sx, sy, cam)
             if self._on_screen(site, margin=100):
                 self.pg.draw.circle(self.surf, MOON_SITE, site, 4)
-                self.surf.blit(self.font_small.render("site", True, MOON_SITE),
-                               (site[0] + 6, site[1] - 6))
+                self.surf.blit(
+                    self.font_small.render("site", True, MOON_SITE), (site[0] + 6, site[1] - 6)
+                )
 
     # --- rocket -----------------------------------------------------------------
 
@@ -481,24 +477,33 @@ class Renderer:
     def _draw_booster(self, at):
         """Stage-1 booster with fins and interstage; base (engine) at x=0."""
         pg = self.pg
-        pg.draw.polygon(self.surf, BOOSTER,
-                        [at(0.0, 0.21), at(1.10, 0.21), at(1.10, -0.21), at(0.0, -0.21)])
-        pg.draw.polygon(self.surf, BOOSTER,
-                        [at(0.0, 0.21), at(0.45, 0.21), at(-0.06, 0.52)])
-        pg.draw.polygon(self.surf, BOOSTER,
-                        [at(0.0, -0.21), at(0.45, -0.21), at(-0.06, -0.52)])
-        pg.draw.polygon(self.surf, INTERSTAGE,
-                        [at(1.10, 0.19), at(1.24, 0.19), at(1.24, -0.19), at(1.10, -0.19)])
+        pg.draw.polygon(
+            self.surf, BOOSTER, [at(0.0, 0.21), at(1.10, 0.21), at(1.10, -0.21), at(0.0, -0.21)]
+        )
+        pg.draw.polygon(self.surf, BOOSTER, [at(0.0, 0.21), at(0.45, 0.21), at(-0.06, 0.52)])
+        pg.draw.polygon(self.surf, BOOSTER, [at(0.0, -0.21), at(0.45, -0.21), at(-0.06, -0.52)])
+        pg.draw.polygon(
+            self.surf,
+            INTERSTAGE,
+            [at(1.10, 0.19), at(1.24, 0.19), at(1.24, -0.19), at(1.10, -0.19)],
+        )
 
     def _draw_upper(self, at, x0):
         """Upper stage body + nose cone starting at rocket-frame x0."""
         pg = self.pg
-        pg.draw.polygon(self.surf, BODY,
-                        [at(x0, 0.18), at(x0 + 1.03, 0.18), at(x0 + 1.03, -0.18), at(x0, -0.18)])
-        pg.draw.polygon(self.surf, BODY_SHADE,
-                        [at(x0, -0.09), at(x0 + 1.03, -0.09), at(x0 + 1.03, -0.18), at(x0, -0.18)])
-        pg.draw.polygon(self.surf, BODY,
-                        [at(x0 + 1.02, 0.185), at(x0 + 1.47, 0.0), at(x0 + 1.02, -0.185)])
+        pg.draw.polygon(
+            self.surf,
+            BODY,
+            [at(x0, 0.18), at(x0 + 1.03, 0.18), at(x0 + 1.03, -0.18), at(x0, -0.18)],
+        )
+        pg.draw.polygon(
+            self.surf,
+            BODY_SHADE,
+            [at(x0, -0.09), at(x0 + 1.03, -0.09), at(x0 + 1.03, -0.18), at(x0, -0.18)],
+        )
+        pg.draw.polygon(
+            self.surf, BODY, [at(x0 + 1.02, 0.185), at(x0 + 1.47, 0.0), at(x0 + 1.02, -0.185)]
+        )
 
     def _draw_rocket(self, cam):
         pg = self.pg
@@ -509,8 +514,7 @@ class Renderer:
         if d is not None:
             dpos = self._to_screen(d["rx"], d["ry"], cam)
             if self._on_screen(dpos, margin=100):
-                self._draw_booster(
-                    self._frame_fn((d["rx"], d["ry"]), d["theta"], size * 0.95, cam))
+                self._draw_booster(self._frame_fn((d["rx"], d["ry"]), d["theta"], size * 0.95, cam))
 
         at = self._frame_fn((env._rx, env._ry), env._theta, size, cam)
         if env._stage == 0:
@@ -519,17 +523,16 @@ class Renderer:
         else:
             self._draw_upper(at, 0.0)
         if self._blend > 0.5:  # ship marker: easy to spot at planet scale
-            pg.draw.circle(self.surf, ACCENT,
-                           self._to_screen(env._rx, env._ry, cam), 10, width=1)
+            pg.draw.circle(self.surf, ACCENT, self._to_screen(env._rx, env._ry, cam), 10, width=1)
 
         throttle = getattr(env, "_throttle_actual", 0.0)
         if throttle > 0.0 and env._terminal is None:
             flick = 1.0 + 0.22 * (np.random.random() - 0.5)
             L = (0.6 + 1.9 * throttle) * flick
-            pg.draw.polygon(self.surf, FLAME_OUT,
-                            [at(0.02, 0.15), at(0.02, -0.15), at(-L, 0.0)])
-            pg.draw.polygon(self.surf, FLAME_IN,
-                            [at(0.02, 0.09), at(0.02, -0.09), at(-0.55 * L, 0.0)])
+            pg.draw.polygon(self.surf, FLAME_OUT, [at(0.02, 0.15), at(0.02, -0.15), at(-L, 0.0)])
+            pg.draw.polygon(
+                self.surf, FLAME_IN, [at(0.02, 0.09), at(0.02, -0.09), at(-0.55 * L, 0.0)]
+            )
 
     # --- HUD --------------------------------------------------------------------
 
@@ -556,7 +559,7 @@ class Renderer:
             speed = info["moon_rel_speed"]
         elif in_sun:
             alt_km = info["sun_distance"] / 1000
-            x, y, vx, vy = env.rocket_helio()
+            _x, y, vx, vy = env.rocket_helio()
             speed = math.hypot(vx, vy)
         else:
             alt_km = info["altitude"] / 1000
@@ -570,8 +573,10 @@ class Renderer:
             (f"vr {info['vr']:+7.0f}", f"vt {info['vt']:+7.0f}"),
             (f"Ap {apo_s:>8}", f"Pe {peri_s:>8}"),
             (f"dv {info['dv_remaining']:6.0f}", f"t  {info['time']:6.0f} s"),
-            (f"stage  {info['stage'] + 1}/{len(env.rocket.stages)}",
-             f"R  {info['episode_return']:7.1f}"),
+            (
+                f"stage  {info['stage'] + 1}/{len(env.rocket.stages)}",
+                f"R  {info['episode_return']:7.1f}",
+            ),
         ]
         y = 88
         for left, right in rows:
@@ -584,8 +589,7 @@ class Renderer:
         self.surf.blit(panel, (W - 170, 10))
         y = 22
         for i, st in enumerate(env.rocket.stages):
-            frac = (env._fuel / st.prop_mass if i == env._stage
-                    else (0.0 if i < env._stage else 1.0))
+            frac = env._fuel / st.prop_mass if i == env._stage else (0.0 if i < env._stage else 1.0)
             self.surf.blit(self.font_small.render(f"S{i + 1}", True, TEXT_DIM), (W - 162, y + 1))
             pg.draw.rect(self.surf, BAR_BG, (W - 138, y, 118, 12), border_radius=3)
             if frac > 0:

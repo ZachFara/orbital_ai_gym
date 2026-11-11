@@ -1,6 +1,6 @@
+import gymnasium as gym
 import numpy as np
 import pytest
-import gymnasium as gym
 
 from orbital_gym.missions.to_moon import ToMoonEnv
 
@@ -79,7 +79,7 @@ def test_soi_frame_switch_and_impact_predictor():
     env._stage = len(env.rocket.stages) - 1
     env._fuel = 0.0
 
-    obs, _, terminated, _, info = env.step(IDLE)
+    _obs, _, terminated, _, info = env.step(IDLE)
     assert info["soi"] == "moon"
     assert not terminated
     # moon-relative elements: dropped from rest, the apoapsis is the release
@@ -104,10 +104,10 @@ def test_moon_autopilot_soft_lands_on_the_moon():
     from scripts.autopilot_demo import MoonAutopilot
 
     env = ToMoonEnv()
-    obs, info = env.reset()
+    _obs, info = env.reset()
     pilot = MoonAutopilot(env)
     while True:
-        obs, _, terminated, truncated, info = env.step(pilot(info))
+        _obs, _, terminated, truncated, info = env.step(pilot(info))
         if terminated or truncated:
             break
     assert info["transfer"] is True  # orbit hold completed, phase 2 entered

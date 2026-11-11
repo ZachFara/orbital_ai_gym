@@ -29,6 +29,7 @@ moments before touchdown the instant its tank ran dry).
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import numpy as np
 
@@ -110,7 +111,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
             render_mode=render_mode,
         )
 
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
+    def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         # The landing site is settable per-episode (goal-conditioned training
         # randomizes it): options={"site_angle": rad} overrides the preset,
         # otherwise the preset holds. Dynamics never depend on the site -- only
@@ -182,9 +183,14 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         """(periapsis_alt, apoapsis_alt, energy, ecc) relative to the moon."""
         mx, my = self._moon_world()
         mvx, mvy = self._moon_velocity()
-        return _elements(self.moon.mu, self.moon.radius,
-                         self._rx - mx, self._ry - my,
-                         self._vx - mvx, self._vy - mvy)
+        return _elements(
+            self.moon.mu,
+            self.moon.radius,
+            self._rx - mx,
+            self._ry - my,
+            self._vx - mvx,
+            self._vy - mvy,
+        )
 
     def _moon_impact(self) -> tuple[bool, float]:
         """Where the current moon-relative conic meets the moon.
@@ -216,8 +222,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
             # circular never lands; a radial drop lands straight below
             return abs(h) < 1.0, _wrap_pi(theta_r - site)
         p_param = h * h / mu
-        f0 = math.copysign(
-            math.acos(max(-1.0, min(1.0, (p_param / r - 1.0) / ecc))), rv)
+        f0 = math.copysign(math.acos(max(-1.0, min(1.0, (p_param / r - 1.0) / ecc))), rv)
         sgn = math.copysign(1.0, h)
         cos_fi = (p_param / R - 1.0) / ecc
         if cos_fi > 1.0:
@@ -241,7 +246,9 @@ class ToMoonEnv(TwoStageToOrbitEnv):
 
     # --- Physics hook ---------------------------------------------------------
 
-    def _extra_acceleration(self, rx: float, ry: float, vx: float, vy: float) -> tuple[float, float]:
+    def _extra_acceleration(
+        self, rx: float, ry: float, vx: float, vy: float
+    ) -> tuple[float, float]:
         mx, my = self._moon_world()
         dx = mx - rx
         dy = my - ry
@@ -321,8 +328,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         vt_m = (self._vx - mvx) * uy - (self._vy - mvy) * ux
         malt = max(0.0, d - self.moon.radius)
         pitch_m = _wrap_pi(self._theta - math.atan2(-ux, uy))
-        dsite = _wrap_pi(self._moon_angle() + self._site_angle
-                         - math.atan2(py, px))
+        dsite = _wrap_pi(self._moon_angle() + self._site_angle - math.atan2(py, px))
 
         # Powered-landing instruments: the numbers a lander's guidance
         # computer would display, so the network reads them instead of
@@ -342,28 +348,28 @@ class ToMoonEnv(TwoStageToOrbitEnv):
                 math.sin(site_b),
                 math.cos(site_b),
                 progress,
-                math.log1p(malt / 1_000.0),      # moon altitude, log: resolves
+                math.log1p(malt / 1_000.0),  # moon altitude, log: resolves
                 min(malt, 20_000.0) / 20_000.0,  # ...600 km and 600 m alike;
-                                                 # linear over the last 20 km
-                vr_m / 1_000.0,                  # moon-relative sink/climb rate
-                vt_m / 1_000.0,                  # moon-relative ground speed
-                math.sin(pitch_m),               # attitude above the MOON's
-                math.cos(pitch_m),               # local horizon
-                math.sin(dsite),                 # site angle around the moon,
-                math.cos(dsite),                 # from the rocket's position
+                # linear over the last 20 km
+                vr_m / 1_000.0,  # moon-relative sink/climb rate
+                vt_m / 1_000.0,  # moon-relative ground speed
+                math.sin(pitch_m),  # attitude above the MOON's
+                math.cos(pitch_m),  # local horizon
+                math.sin(dsite),  # site angle around the moon,
+                math.cos(dsite),  # from the rocket's position
                 self.delta_v_remaining() / self.total_delta_v(),
-                min(2.0, g_m / a_max) / 2.0,     # throttle that hovers
+                min(2.0, g_m / a_max) / 2.0,  # throttle that hovers
                 min(2.0, need / max(a_max - g_m, 1e-3)) / 2.0,
-                                                 # suicide-burn margin: decel
-                                                 # to stop at the surface vs
-                                                 # headroom; 0.5 = last moment
-                math.log1p(tti) / 9.0,           # time to surface at this
-                                                 # sink rate (log-scaled)
-                1.0 if impacting else 0.0,       # coasting path hits the moon
+                # suicide-burn margin: decel
+                # to stop at the surface vs
+                # headroom; 0.5 = last moment
+                math.log1p(tti) / 9.0,  # time to surface at this
+                # sink rate (log-scaled)
+                1.0 if impacting else 0.0,  # coasting path hits the moon
                 math.sin(miss) if in_soi else 0.0,
                 math.cos(miss) if in_soi else 0.0,
-                                                 # predicted touchdown vs the
-                                                 # site, angle around the moon
+                # predicted touchdown vs the
+                # site, angle around the moon
             ],
             dtype=np.float32,
         )

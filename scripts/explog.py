@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from typing import Any
 
 os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
 import mlflow
@@ -36,19 +37,23 @@ MD_LOG = os.path.join(REPO, "EXPERIMENTS.md")
 def setup(experiment: str = EXPERIMENT) -> None:
     mlflow.set_tracking_uri(TRACKING_URI)
     if mlflow.get_experiment_by_name(experiment) is None:
-        mlflow.create_experiment(experiment,
-                                 artifact_location="file:" + os.path.join(REPO, "mlruns"))
+        mlflow.create_experiment(
+            experiment, artifact_location="file:" + os.path.join(REPO, "mlruns")
+        )
     mlflow.set_experiment(experiment)
 
 
-def start(name: str, params: dict, hypothesis: str, tags: dict | None = None):
+def start(
+    name: str, params: dict[str, Any], hypothesis: str, tags: dict[str, str] | None = None
+) -> Any:
     setup()
     run = mlflow.start_run(run_name=name)
-    flat = {k: (v if isinstance(v, (int, float, str, bool)) else repr(v))
-            for k, v in params.items()}
+    flat = {
+        k: (v if isinstance(v, (int, float, str, bool)) else repr(v)) for k, v in params.items()
+    }
     items = list(flat.items())
     for i in range(0, len(items), 90):  # MLflow caps a param batch at 100
-        mlflow.log_params(dict(items[i:i + 90]))
+        mlflow.log_params(dict(items[i : i + 90]))
     mlflow.set_tags({"hypothesis": hypothesis, **(tags or {})})
     return run
 
@@ -64,8 +69,12 @@ def note(text: str) -> None:
     mlflow.set_tag("mlflow.note.content", f"{cur}\n[{stamp}] {text}".strip())
 
 
-def finish(outcome: str, diagnosis: str, status: str = "FINISHED",
-           summary_metrics: dict | None = None) -> None:
+def finish(
+    outcome: str,
+    diagnosis: str,
+    status: str = "FINISHED",
+    summary_metrics: dict[str, float] | None = None,
+) -> None:
     """Close the run and mirror it into EXPERIMENTS.md."""
     run = mlflow.active_run()
     if run is None:
@@ -85,14 +94,16 @@ def finish(outcome: str, diagnosis: str, status: str = "FINISHED",
         f"**Diagnosis:** {diagnosis}\n",
     ]
     if metrics:
-        lines.append("**Key metrics:** " + ", ".join(
-            f"{k}={v:.3g}" for k, v in metrics.items()) + "\n")
+        lines.append(
+            "**Key metrics:** " + ", ".join(f"{k}={v:.3g}" for k, v in metrics.items()) + "\n"
+        )
     with open(MD_LOG, "a") as f:
         f.write("\n".join(lines))
     mlflow.end_run(status=status)
 
 
 # --- CLI ----------------------------------------------------------------------
+
 
 def _table() -> None:
     setup()
@@ -113,8 +124,9 @@ def _table() -> None:
             v = r.get(f"tags.{key}")
             if isinstance(v, str) and v:
                 print(f"    {key:<10} {v}")
-        keep = {c[8:]: r[c] for c in mcols
-                if r[c] == r[c] and c[8:].startswith(("eval/", "final/"))}
+        keep = {
+            c[8:]: r[c] for c in mcols if r[c] == r[c] and c[8:].startswith(("eval/", "final/"))
+        }
         if keep:
             print("    metrics    " + ", ".join(f"{k}={v:.3g}" for k, v in sorted(keep.items())))
 
@@ -122,6 +134,9 @@ def _table() -> None:
 def _show(prefix: str) -> None:
     setup()
     exp = mlflow.get_experiment_by_name(EXPERIMENT)
+    if exp is None:
+        print("no runs yet")
+        return
     runs = mlflow.search_runs([exp.experiment_id])
     hit = runs[runs["run_id"].str.startswith(prefix)]
     if hit.empty:
@@ -137,6 +152,8 @@ def _show(prefix: str) -> None:
 def _set_tag(prefix: str, key: str, text: str) -> None:
     setup()
     exp = mlflow.get_experiment_by_name(EXPERIMENT)
+    if exp is None:
+        raise SystemExit("no runs yet")
     runs = mlflow.search_runs([exp.experiment_id])
     hit = runs[runs["run_id"].str.startswith(prefix)]
     if hit.empty:

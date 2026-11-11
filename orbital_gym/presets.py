@@ -15,11 +15,11 @@ G0 = 9.80665  # standard gravity for Isp conversion, m/s^2
 @dataclass(frozen=True)
 class Planet:
     name: str
-    radius: float           # m
-    mu: float               # gravitational parameter GM, m^3/s^2
-    rho0: float             # sea-level atmospheric density, kg/m^3
-    scale_height: float     # exponential atmosphere scale height, m
-    space_altitude: float   # top of atmosphere = reward cutoff altitude, m
+    radius: float  # m
+    mu: float  # gravitational parameter GM, m^3/s^2
+    rho0: float  # sea-level atmospheric density, kg/m^3
+    scale_height: float  # exponential atmosphere scale height, m
+    space_altitude: float  # top of atmosphere = reward cutoff altitude, m
 
     @property
     def surface_gravity(self) -> float:
@@ -37,31 +37,32 @@ class Planet:
 @dataclass(frozen=True)
 class Moon:
     name: str
-    radius: float          # m
-    mu: float              # m^3/s^2
-    orbit_radius: float    # m, circular orbit around the planet center
-    orbit_period: float    # s
+    radius: float  # m
+    mu: float  # m^3/s^2
+    orbit_radius: float  # m, circular orbit around the planet center
+    orbit_period: float  # s
     site_angle: float = 0.0  # rad, site angle around moon body in moon frame
 
 
 @dataclass(frozen=True)
 class Star:
     name: str
-    radius: float   # m
-    mu: float       # m^3/s^2
+    radius: float  # m
+    mu: float  # m^3/s^2
 
 
 @dataclass(frozen=True)
 class OrbitingBody:
     """A planet on circular rails around a star: a landing target with its own
     (possibly thin) atmosphere. Used for the Mars-like target of ToMars."""
+
     name: str
-    radius: float          # m
-    mu: float              # m^3/s^2
-    orbit_radius: float    # m, around the star
-    orbit_period: float    # s (Keplerian for the star's mu)
+    radius: float  # m
+    mu: float  # m^3/s^2
+    orbit_radius: float  # m, around the star
+    orbit_period: float  # s (Keplerian for the star's mu)
     site_angle: float = 0.0  # rad, landing site in the body frame
-    rho0: float = 0.0        # kg/m^3 sea-level density (0 = airless)
+    rho0: float = 0.0  # kg/m^3 sea-level density (0 = airless)
     scale_height: float = 1.0
     space_altitude: float = 0.0  # m, top of the atmosphere
 
@@ -79,6 +80,7 @@ class StarSystem:
     t = 0. The default target phase is chosen so that a Hohmann departure
     window opens shortly after a prompt ascent-and-hold (see ToMarsEnv).
     """
+
     name: str
     star: Star
     home_orbit_radius: float
@@ -90,18 +92,18 @@ class StarSystem:
 
 @dataclass(frozen=True)
 class Stage:
-    dry_mass: float   # kg, structure + engine (top stage: includes payload)
+    dry_mass: float  # kg, structure + engine (top stage: includes payload)
     prop_mass: float  # kg
-    thrust: float     # N, max vacuum thrust (no pressure dependence modeled)
-    isp: float        # s
-    cd_area: float    # drag coefficient * reference area, m^2
+    thrust: float  # N, max vacuum thrust (no pressure dependence modeled)
+    isp: float  # s
+    cd_area: float  # drag coefficient * reference area, m^2
 
 
 @dataclass(frozen=True)
 class Rocket:
     name: str
     stages: tuple[Stage, ...]  # bottom to top
-    max_turn_rate: float       # rad/s attitude slew limit
+    max_turn_rate: float  # rad/s attitude slew limit
 
     @property
     def launch_mass(self) -> float:
@@ -139,7 +141,7 @@ PLANETS: dict[str, Planet] = {
     "easy": Planet(
         name="easy",
         radius=600_000.0,
-        mu=3.5316e12,            # gives 9.81 m/s^2 surface gravity
+        mu=3.5316e12,  # gives 9.81 m/s^2 surface gravity
         rho0=1.225,
         scale_height=5_600.0,
         space_altitude=70_000.0,
@@ -210,11 +212,11 @@ SYSTEMS: dict[str, StarSystem] = {
         target=OrbitingBody(
             name="easy_mars",
             radius=340_000.0,
-            mu=4.28e11,              # 3.7 m/s^2 surface gravity
+            mu=4.28e11,  # 3.7 m/s^2 surface gravity
             orbit_radius=_MARS_R,
             orbit_period=2.0 * math.pi * (_MARS_R**3 / _SUN_MU) ** 0.5,
             site_angle=0.0,
-            rho0=0.015,              # thin: aerobraking helps, barely
+            rho0=0.015,  # thin: aerobraking helps, barely
             scale_height=9_000.0,
             space_altitude=50_000.0,
         ),
@@ -232,10 +234,8 @@ ROCKETS: dict[str, Rocket] = {
     "easy": Rocket(
         name="easy",
         stages=(
-            Stage(dry_mass=3_000.0, prop_mass=15_000.0, thrust=350_000.0,
-                  isp=280.0, cd_area=8.0),
-            Stage(dry_mass=1_000.0, prop_mass=2_000.0, thrust=60_000.0,
-                  isp=320.0, cd_area=3.0),
+            Stage(dry_mass=3_000.0, prop_mass=15_000.0, thrust=350_000.0, isp=280.0, cd_area=8.0),
+            Stage(dry_mass=1_000.0, prop_mass=2_000.0, thrust=60_000.0, isp=320.0, cd_area=3.0),
         ),
         max_turn_rate=math.radians(15.0),
     ),
@@ -249,10 +249,8 @@ ROCKETS: dict[str, Rocket] = {
     "moon": Rocket(
         name="moon",
         stages=(
-            Stage(dry_mass=6_200.0, prop_mass=31_000.0, thrust=740_000.0,
-                  isp=280.0, cd_area=13.0),
-            Stage(dry_mass=1_000.0, prop_mass=6_000.0, thrust=137_000.0,
-                  isp=350.0, cd_area=5.0),
+            Stage(dry_mass=6_200.0, prop_mass=31_000.0, thrust=740_000.0, isp=280.0, cd_area=13.0),
+            Stage(dry_mass=1_000.0, prop_mass=6_000.0, thrust=137_000.0, isp=350.0, cd_area=5.0),
         ),
         max_turn_rate=math.radians(15.0),
     ),
@@ -263,12 +261,9 @@ ROCKETS: dict[str, Rocket] = {
     "mars": Rocket(
         name="mars",
         stages=(
-            Stage(dry_mass=7_000.0, prop_mass=36_000.0, thrust=950_000.0,
-                  isp=285.0, cd_area=14.0),
-            Stage(dry_mass=1_500.0, prop_mass=9_000.0, thrust=160_000.0,
-                  isp=340.0, cd_area=5.0),
-            Stage(dry_mass=700.0, prop_mass=2_600.0, thrust=40_000.0,
-                  isp=350.0, cd_area=3.0),
+            Stage(dry_mass=7_000.0, prop_mass=36_000.0, thrust=950_000.0, isp=285.0, cd_area=14.0),
+            Stage(dry_mass=1_500.0, prop_mass=9_000.0, thrust=160_000.0, isp=340.0, cd_area=5.0),
+            Stage(dry_mass=700.0, prop_mass=2_600.0, thrust=40_000.0, isp=350.0, cd_area=3.0),
         ),
         max_turn_rate=math.radians(15.0),
     ),
@@ -276,10 +271,10 @@ ROCKETS: dict[str, Rocket] = {
     "earth": Rocket(
         name="earth",
         stages=(
-            Stage(dry_mass=22_000.0, prop_mass=400_000.0, thrust=7_500_000.0,
-                  isp=288.0, cd_area=25.0),
-            Stage(dry_mass=5_500.0, prop_mass=55_000.0, thrust=900_000.0,
-                  isp=345.0, cd_area=8.0),
+            Stage(
+                dry_mass=22_000.0, prop_mass=400_000.0, thrust=7_500_000.0, isp=288.0, cd_area=25.0
+            ),
+            Stage(dry_mass=5_500.0, prop_mass=55_000.0, thrust=900_000.0, isp=345.0, cd_area=8.0),
         ),
         max_turn_rate=math.radians(15.0),
     ),
@@ -288,20 +283,20 @@ ROCKETS: dict[str, Rocket] = {
 
 def describe(rocket: Rocket, planet: Planet) -> str:
     lines = [
-        f"Planet '{planet.name}': R={planet.radius/1000:.0f} km, "
+        f"Planet '{planet.name}': R={planet.radius / 1000:.0f} km, "
         f"g={planet.surface_gravity:.2f} m/s^2, "
-        f"atmosphere top / reward cutoff at {planet.space_altitude/1000:.0f} km",
+        f"atmosphere top / reward cutoff at {planet.space_altitude / 1000:.0f} km",
         f"  circular velocity just above atmosphere: "
         f"{planet.circular_velocity(planet.space_altitude):.0f} m/s",
         f"  estimated delta-v to orbit (incl. losses): "
         f"~{required_delta_v_estimate(planet):.0f} m/s",
-        f"Rocket '{rocket.name}': launch mass {rocket.launch_mass/1000:.1f} t, "
+        f"Rocket '{rocket.name}': launch mass {rocket.launch_mass / 1000:.1f} t, "
         f"liftoff TWR {rocket.stages[0].thrust / (rocket.launch_mass * planet.surface_gravity):.2f}",
     ]
     for i in range(len(rocket.stages)):
         s = rocket.stages[i]
         lines.append(
-            f"  stage {i + 1}: {s.prop_mass/1000:.1f} t propellant, "
+            f"  stage {i + 1}: {s.prop_mass / 1000:.1f} t propellant, "
             f"Isp {s.isp:.0f} s, ideal delta-v {stage_delta_v(rocket, i):.0f} m/s"
         )
     lines.append(f"  total ideal delta-v: {total_delta_v(rocket):.0f} m/s")

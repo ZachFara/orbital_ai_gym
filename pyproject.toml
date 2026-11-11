@@ -15,8 +15,125 @@ dependencies = [
 
 [project.optional-dependencies]
 render = ["pygame>=2.5"]
-train = ["stable-baselines3>=2.3"]
-dev = ["pytest>=8"]
+train = ["stable-baselines3>=2.3", "mlflow>=3", "imageio>=2.30"]
+dev = [
+    "pytest>=8",
+    "ruff>=0.14",
+    "mypy>=1.19",
+    "vulture>=2.14",
+    "import-linter>=2.3",
+    "pre-commit>=4",
+    "types-setuptools",
+]
 
 [tool.setuptools.packages.find]
 include = ["orbital_gym*"]
+
+# ---------------------------------------------------------------------------
+# Quality gates. `make check` runs every tool below; pre-commit and CI run
+# `make check`. Rules may be tightened, never loosened, without a decision
+# record (docs/decisions/0002). The per-file lists are the BASELINE for code
+# that predates the gates; PROGRESS.md carries one burn-down task per entry
+# and an entry is deleted the moment its file passes.
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "C90", "SIM", "N", "RUF"]
+ignore = [
+    "E501",  # the formatter owns line length; long strings/comments allowed
+    "N806",  # physics notation: R, E, H, M, A... as local names
+    "N803",  # ...and as arguments
+    "N802",  # ...and in a few function names (F, E, S of a solver)
+    "N812",  # `import torch.nn.functional as F`
+]
+mccabe.max-complexity = 12
+
+[tool.ruff.lint.per-file-ignores]
+# baseline: functions above the complexity limit when the gate was added
+"orbital_gym/missions/to_orbit.py" = ["C901"]
+"orbital_gym/rendering.py" = ["C901"]
+"scripts/autopilot_demo.py" = ["C901"]
+"scripts/fly_manual.py" = ["C901"]
+"scripts/train_guided.py" = ["C901"]
+"scripts/train_her.py" = ["C901"]
+"scripts/train_moon_rl.py" = ["C901"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unreachable = true
+explicit_package_bases = true
+mypy_path = "."
+ignore_missing_imports = true
+exclude = ["^\\.venv/", "^\\.scratch/", "^cache/", "^models/", "^mlruns/"]
+
+# baseline: modules written before the type gate are not type-checked until
+# the PROGRESS.md burn-down task that removes their entry (decision 0002).
+# Everything else, including every new module, is checked with --strict.
+[[tool.mypy.overrides]]
+module = [
+    "orbital_gym.rendering",
+    "orbital_gym.missions.to_orbit",
+    "orbital_gym.missions.orbit_and_return",
+    "orbital_gym.missions.to_moon",
+    "orbital_gym.missions.to_mars",
+    "orbital_gym.rl.moon_landing",
+    "scripts.autopilot_demo",
+    "scripts.fly_manual",
+    "scripts.fly_moon_policy",
+    "scripts.train_guided",
+    "scripts.train_her",
+    "scripts.train_moon_rl",
+    "scripts.train_ppo",
+    "tests.test_env",
+    "tests.test_orbit_and_return",
+    "tests.test_to_moon",
+    "tests.test_to_mars",
+]
+ignore_errors = true
+
+[tool.vulture]
+min_confidence = 80
+paths = ["orbital_gym", "scripts", "tools"]
+
+[tool.importlinter]
+root_packages = ["orbital_gym", "scripts", "tests", "tools"]
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+name = "presets are the bottom layer"
+type = "forbidden"
+source_modules = ["orbital_gym.presets"]
+forbidden_modules = ["orbital_gym.missions", "orbital_gym.rendering", "orbital_gym.rl"]
+
+[[tool.importlinter.contracts]]
+name = "missions do not import the RL layer"
+type = "forbidden"
+source_modules = ["orbital_gym.missions"]
+forbidden_modules = ["orbital_gym.rl"]
+
+[[tool.importlinter.contracts]]
+name = "rendering is a view: only presets below it"
+type = "forbidden"
+source_modules = ["orbital_gym.rendering"]
+forbidden_modules = ["orbital_gym.missions", "orbital_gym.rl"]
+
+[[tool.importlinter.contracts]]
+name = "the package never imports scripts or tests"
+type = "forbidden"
+source_modules = ["orbital_gym"]
+forbidden_modules = ["scripts", "tests", "tools"]
+# baseline: the RL state bank builds from the pilots that still live in
+# scripts/. Removed by the PROGRESS.md task that moves the pilots into
+# orbital_gym/autopilots/.
+ignore_imports = ["orbital_gym.rl.moon_landing -> scripts.autopilot_demo"]
+
+[[tool.importlinter.contracts]]
+name = "tests and tools are leaves"
+type = "forbidden"
+source_modules = ["orbital_gym", "scripts"]
+forbidden_modules = ["tests", "tools"]

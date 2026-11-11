@@ -11,3 +11,7 @@ local/
 mlruns/
 cache/
 mlflow.db
+
+.scratch/
+.mypy_cache/
+.ruff_cache/

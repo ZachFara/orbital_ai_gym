@@ -1,42 +1,56 @@
 """orbital_gym: 2D rocket mission environments for Gymnasium.
 
-    import gymnasium as gym
-    import orbital_gym
+import gymnasium as gym
+import orbital_gym
 
-    env = gym.make("TwoStageToOrbit-v0")           # launch to a stable orbit
-    env = gym.make("OrbitAndReturn-v0")            # ...then come home to the pad
-    env = gym.make("ToMoon-v0")                    # orbit, hold, land on the moon
-    env = gym.make("ToMars-v0")                    # three stages, a star, a Mars
-    env = gym.make("TwoStageToOrbit-v0", planet="earth", max_episode_steps=8000)
+env = gym.make("TwoStageToOrbit-v0")           # launch to a stable orbit
+env = gym.make("OrbitAndReturn-v0")            # ...then come home to the pad
+env = gym.make("ToMoon-v0")                    # orbit, hold, land on the moon
+env = gym.make("ToMars-v0")                    # three stages, a star, a Mars
+env = gym.make("TwoStageToOrbit-v0", planet="earth", max_episode_steps=8000)
 """
 
 from gymnasium.envs.registration import register
 
-from .presets import (MOONS, PLANETS, ROCKETS, STARS, SYSTEMS, Moon, OrbitingBody, Planet, Rocket,
-                      Stage, Star, StarSystem, describe, total_delta_v)
-from .missions.to_orbit import TwoStageToOrbitEnv
 from .missions.orbit_and_return import OrbitAndReturnEnv
-from .missions.to_moon import ToMoonEnv
 from .missions.to_mars import ToMarsEnv
+from .missions.to_moon import ToMoonEnv
+from .missions.to_orbit import TwoStageToOrbitEnv
+from .presets import (
+    MOONS,
+    PLANETS,
+    ROCKETS,
+    STARS,
+    SYSTEMS,
+    Moon,
+    OrbitingBody,
+    Planet,
+    Rocket,
+    Stage,
+    Star,
+    StarSystem,
+    describe,
+    total_delta_v,
+)
 
 __version__ = "0.1.0"
 __all__ = [
-    "TwoStageToOrbitEnv",
-    "OrbitAndReturnEnv",
-    "ToMoonEnv",
-    "ToMarsEnv",
-    "Moon",
-    "OrbitingBody",
-    "Star",
-    "StarSystem",
-    "STARS",
-    "SYSTEMS",
-    "Planet",
-    "Rocket",
-    "Stage",
     "MOONS",
     "PLANETS",
     "ROCKETS",
+    "STARS",
+    "SYSTEMS",
+    "Moon",
+    "OrbitAndReturnEnv",
+    "OrbitingBody",
+    "Planet",
+    "Rocket",
+    "Stage",
+    "Star",
+    "StarSystem",
+    "ToMarsEnv",
+    "ToMoonEnv",
+    "TwoStageToOrbitEnv",
     "describe",
     "total_delta_v",
 ]
