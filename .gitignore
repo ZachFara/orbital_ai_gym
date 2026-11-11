@@ -7,6 +7,7 @@ dist/
 models/
 .pytest_cache/
 .DS_Store
-local/mlruns/
+local/
+mlruns/
 cache/
 mlflow.db
