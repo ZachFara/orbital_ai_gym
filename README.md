@@ -34,6 +34,7 @@ presets, and the renderer:
 | `TwoStageToOrbit-v0` | the environment described above |
 | `OrbitAndReturn-v0` | reach orbit, hold it half a revolution, then land back on the pad |
 | `ToMoon-v0` | reach orbit, hold, then transfer to a site on an orbiting moon |
+| `ToMars-v0` | three stages: escape the planet, cross a star system, land on a Mars-like planet |
 
 **ToMoon** adds a moon on rails (circular orbit, closed-form position) whose
 gravity pulls on the rocket. After the same climb-and-hold as the return
@@ -61,6 +62,40 @@ it "escaped" seconds before touchdown the moment its tank ran dry). The
 renderer follows suit: in the moon's SOI the map view re-centers on the
 moon, the trajectory ellipse is drawn around it, and the HUD's altitude
 and speed go moon-relative.
+
+**ToMars** is the insane rung. The launch planet now circles a **star**
+on rails, and so does a Mars-like target with a thin atmosphere; the
+rocket is a three-stage ~11.7 km/s vehicle (`ROCKETS["mars"]`). The
+simulation stays in the launch planet's frame, with the star and the
+target entering as *tidal* accelerations (their pull on the rocket minus
+their pull on the planet), which is exact for a planet in free fall on a
+Keplerian circle. The system is compact so the trip fits an episode
+(~15,000 one-second steps): the planet's year is 3.9 h, a Hohmann
+transfer 2.8 h, and the planet is 0.35% of the star's mass. That compactness
+is what makes it hard: the star's tide is 3.4% of gravity in the parking
+orbit (the Hill radius is three planet radii), it does about a kilometre
+per second of work on the rocket during the climb-out, so patched conics
+cannot predict the heliocentric orbit after escape, and the departure
+window closes in minutes and does not come back within the episode.
+Reward mirrors ToMoon: the climb and hold, then potential-based progress
+toward the landing site scaled by the target's orbit radius, +500 for a
+soft touchdown within 20 km of the site, +250 anywhere else on the target,
+−100 for crashing (into the star too). Spheres of influence switch the
+published elements between planet, star and target; the escape guard
+fires only on a star-hyperbolic coast with an empty tank. The observation
+is `(43,)`: the base 9, heliocentric position/velocity/elements, target
+and site bearings, the target's lead angle (the departure window), a
+target-local landing panel identical to the moon's, the SOI as a one-hot,
+and the dynamic pressure in the target's atmosphere.
+
+The scripted `MarsAutopilot` proves it closes: ascent and a quarter-orbit
+hold, a simulate-ahead departure (for a grid of burns it coasts the full
+force model out of the planet's influence and prices the rest with a
+free-arrival-time Lambert solve, firing when burn plus correction is
+cheap), Lambert midcourse corrections aimed at a 150 km periapsis, capture
+into a parking orbit, a timed deorbit and the moon pilot's powered
+descent. It lands at ~1 m/s about 100 km from the site with ~3 km/s to
+spare, in ~15,300 steps.
 
 **OrbitAndReturn** is the boomerang mission, in two phases with an
 irreversible switch:
@@ -116,6 +151,8 @@ python scripts/autopilot_demo.py --mission moon --render   # westward ascent, ho
                                                     # trans-lunar injection, retro
                                                     # braking to a soft landing
 python scripts/autopilot_demo.py --planet earth     # hard mode, ~11 km/s
+python scripts/autopilot_demo.py --mission mars --render   # three stages, a star,
+                                                    # a departure window, a Mars
 ```
 
 The moon autopilot flies the whole profile — leaner westward ascent

@@ -45,6 +45,50 @@ class Moon:
 
 
 @dataclass(frozen=True)
+class Star:
+    name: str
+    radius: float   # m
+    mu: float       # m^3/s^2
+
+
+@dataclass(frozen=True)
+class OrbitingBody:
+    """A planet on circular rails around a star: a landing target with its own
+    (possibly thin) atmosphere. Used for the Mars-like target of ToMars."""
+    name: str
+    radius: float          # m
+    mu: float              # m^3/s^2
+    orbit_radius: float    # m, around the star
+    orbit_period: float    # s (Keplerian for the star's mu)
+    site_angle: float = 0.0  # rad, landing site in the body frame
+    rho0: float = 0.0        # kg/m^3 sea-level density (0 = airless)
+    scale_height: float = 1.0
+    space_altitude: float = 0.0  # m, top of the atmosphere
+
+    def density(self, altitude: float) -> float:
+        if self.rho0 <= 0.0 or altitude >= self.space_altitude:
+            return 0.0
+        return self.rho0 * math.exp(-max(0.0, altitude) / self.scale_height)
+
+
+@dataclass(frozen=True)
+class StarSystem:
+    """The launch planet on circular rails around a star, plus a target body.
+
+    home_phase0 / target_phase0 are the bodies' angles around the star at
+    t = 0. The default target phase is chosen so that a Hohmann departure
+    window opens shortly after a prompt ascent-and-hold (see ToMarsEnv).
+    """
+    name: str
+    star: Star
+    home_orbit_radius: float
+    home_orbit_period: float
+    target: OrbitingBody
+    home_phase0: float = 0.0
+    target_phase0: float = 0.0
+
+
+@dataclass(frozen=True)
 class Stage:
     dry_mass: float   # kg, structure + engine (top stage: includes payload)
     prop_mass: float  # kg
@@ -137,6 +181,52 @@ MOONS: dict[str, Moon] = {
     ),
 }
 
+# --- a compact star system for the Mars mission -------------------------------
+#
+# Scaled so that the whole trip fits an episode of ~12,000 one-second steps:
+# the "easy" planet circles a small, heavy star at 17,100 km (year 3.9 h),
+# the Mars-like target at 26,000 km (the real Earth/Mars ratio of 1.52).
+# A Hohmann transfer takes ~2.8 h; departure needs ~1.0 km/s from the
+# 670 km parking orbit, arrival ~1.7 km/s at the target's surface (its own
+# escape velocity dominates). The star's pull at the planet is 3.4 m/s^2, so
+# its tidal field is a real perturbation on a long parking-orbit hold: the
+# planet's Hill radius is only ~3 planet radii. The planet is 0.35% of the
+# star's mass (3.5 Jupiters): heavy enough to bend heliocentric conics a
+# little, which is why the pilot trims its cruise.
+_SUN_MU = 1.0e15
+_HOME_R = 1.71e7
+_MARS_R = 2.6e7
+
+STARS: dict[str, Star] = {
+    "easy": Star(name="easy_sun", radius=1.2e6, mu=_SUN_MU),
+}
+
+SYSTEMS: dict[str, StarSystem] = {
+    "easy": StarSystem(
+        name="easy_system",
+        star=STARS["easy"],
+        home_orbit_radius=_HOME_R,
+        home_orbit_period=2.0 * math.pi * (_HOME_R**3 / _SUN_MU) ** 0.5,
+        target=OrbitingBody(
+            name="easy_mars",
+            radius=340_000.0,
+            mu=4.28e11,              # 3.7 m/s^2 surface gravity
+            orbit_radius=_MARS_R,
+            orbit_period=2.0 * math.pi * (_MARS_R**3 / _SUN_MU) ** 0.5,
+            site_angle=0.0,
+            rho0=0.015,              # thin: aerobraking helps, barely
+            scale_height=9_000.0,
+            space_altitude=50_000.0,
+        ),
+        home_phase0=0.0,
+        # Hohmann lead angle at departure is ~44 deg and shrinks 0.012 deg/s;
+        # 72 deg at t=0 puts the window ~40 min in: after the ascent and a
+        # quarter-revolution hold, with most of one parking orbit to spare.
+        target_phase0=math.radians(72.0),
+    ),
+}
+
+
 ROCKETS: dict[str, Rocket] = {
     # ~6.9 km/s ideal delta-v vs ~3.3 km/s required: roomy margin on purpose.
     "easy": Rocket(
@@ -163,6 +253,22 @@ ROCKETS: dict[str, Rocket] = {
                   isp=280.0, cd_area=13.0),
             Stage(dry_mass=1_000.0, prop_mass=6_000.0, thrust=137_000.0,
                   isp=350.0, cd_area=5.0),
+        ),
+        max_turn_rate=math.radians(15.0),
+    ),
+    # Three stages, ~11.7 km/s ideal: the Mars-mission rocket (ToMars default).
+    # Ascent ~4.3, departure ~1.0, arrival + landing ~2.0 plus losses leaves
+    # a few km/s for midcourse corrections and a sloppy descent. Liftoff TWR
+    # and stage-1 burn time match "easy" so the same gravity turn flies.
+    "mars": Rocket(
+        name="mars",
+        stages=(
+            Stage(dry_mass=7_000.0, prop_mass=36_000.0, thrust=950_000.0,
+                  isp=285.0, cd_area=14.0),
+            Stage(dry_mass=1_500.0, prop_mass=9_000.0, thrust=160_000.0,
+                  isp=340.0, cd_area=5.0),
+            Stage(dry_mass=700.0, prop_mass=2_600.0, thrust=40_000.0,
+                  isp=350.0, cd_area=3.0),
         ),
         max_turn_rate=math.radians(15.0),
     ),

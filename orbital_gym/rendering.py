@@ -14,6 +14,10 @@ Design notes:
   markers.
 - rgb_array mode draws to a plain Surface and never opens a window, so it
   works headless (tests, video capture) without a display.
+- Secondary bodies come through the env's "moon" hooks (ToMoon's moon, or
+  ToMars's target); a ToMars env additionally exposes its star, and once the
+  rocket leaves the planet's sphere of influence the map view becomes a
+  system view centred on the star.
 """
 
 from __future__ import annotations
@@ -42,6 +46,11 @@ BOOSTER = (196, 200, 210)
 MOON = (190, 196, 208)
 MOON_SHADE = (142, 150, 166)
 MOON_SITE = (255, 214, 110)
+MARS = (206, 122, 86)
+MARS_SHADE = (150, 84, 60)
+SUN = (255, 214, 96)
+SUN_GLOW = (120, 96, 40)
+SYSTEM_ORBIT = (70, 80, 110)
 INTERSTAGE = (60, 64, 78)
 FLAME_OUT = (255, 140, 40)
 FLAME_IN = (255, 224, 120)
@@ -101,11 +110,17 @@ class Renderer:
 
     def _soi(self):
         """The body whose sphere of influence the rocket is in:
-        ("planet"|"moon", center_x, center_y, mu, body_radius)."""
+        ("planet"|"moon"|"sun", center_x, center_y, mu, body_radius). "moon"
+        is whatever secondary body the env exposes through the moon hooks
+        (the Mars-like target of ToMars included); "sun" is the star of a
+        ToMars system once the rocket has left the planet's sphere."""
         env = self.env
         if hasattr(env, "moon_soi") and env._in_moon_soi():
             mx, my = env._moon_world()
             return "moon", mx, my, env.moon.mu, env.moon.radius
+        if hasattr(env, "_sun_world") and not env._in_planet_soi():
+            sx, sy = env._sun_world()
+            return "sun", sx, sy, env.star.mu, env.sun_radius
         return "planet", 0.0, 0.0, env.planet.mu, env.planet.radius
 
     def _camera(self):
@@ -132,16 +147,28 @@ class Renderer:
         # smoothed so crossing the boundary glides instead of jumping;
         # at 1 the focus tracks the (moving) moon exactly, lag-free.
         soi, sx, sy, _, soi_body_r = self._soi()
-        mx, my = env._moon_world() if hasattr(env, "moon_soi") else (0.0, 0.0)
+        mx, my = sx, sy
         if soi == "moon":
             blend_t = 1.0
             d = math.hypot(env._rx - mx, env._ry - my)
             span_map = 1.15 * (soi_body_r + max(d - soi_body_r, 0.35 * soi_body_r))
-        want_f = 1.0 if soi == "moon" else 0.0
+        elif soi == "sun":
+            # system view: the star at the centre, wide enough for the
+            # target's orbit and for wherever the rocket has got to
+            blend_t = 1.0
+            d = math.hypot(env._rx - mx, env._ry - my)
+            span_map = 1.15 * max(d, 1.05 * env.target.orbit_radius)
+        want_f = 1.0 if soi in ("moon", "sun") else 0.0
         if self._span is None:
             self._fblend = want_f  # first frame ever: start converged
+            self._focus_name = soi
+        elif getattr(self, "_focus_name", soi) != soi and soi != "planet":
+            self._fblend = 0.0     # new focus body: glide out from the planet view
+            self._focus_name = soi
         else:
             self._fblend += (want_f - self._fblend) * 0.06
+            if soi != "planet":
+                self._focus_name = soi
         fx, fy = self._fblend * mx, self._fblend * my
 
         rn = math.hypot(env._rx, env._ry)
@@ -301,6 +328,11 @@ class Renderer:
             vx, vy = env._vx - mvx, env._vy - mvy
             min_apo = 0.05 * body_r  # any bound moon orbit is interesting
             r_lim = env.moon_soi
+        elif soi == "sun":
+            svx, svy = env._sun_velocity()
+            vx, vy = env._vx - svx, env._vy - svy
+            min_apo = 0.05 * body_r
+            r_lim = 3.0 * env.target.orbit_radius
         else:
             vx, vy = env._vx, env._vy
             min_apo = 0.3 * env.planet.space_altitude
@@ -388,8 +420,27 @@ class Renderer:
                 self.pg.draw.aaline(self.surf, color, prev, s)
             prev = s if ok else None
 
+    def _draw_star_system(self, cam):
+        """ToMars: the star, and the launch planet's and target's orbits
+        around it (only when the view is wide enough to show them)."""
+        env = self.env
+        if not hasattr(env, "_sun_world"):
+            return
+        sx, sy = env._sun_world()
+        center = self._to_screen(sx, sy, cam)
+        ppm = cam[2]
+        for radius in (env.home_r, env.target.orbit_radius):
+            r_px = radius * ppm
+            if 20 < r_px < 20000 and self._on_screen(center, margin=r_px + 50):
+                self.pg.draw.circle(self.surf, SYSTEM_ORBIT, center, r_px, width=1)
+        if self._on_screen(center, margin=400):
+            r_px = max(4.0, env.sun_radius * ppm)
+            self.pg.draw.circle(self.surf, SUN_GLOW, center, r_px * 1.8)
+            self.pg.draw.circle(self.surf, SUN, center, r_px)
+
     def _draw_secondary_bodies(self, cam):
         env = self.env
+        self._draw_star_system(cam)
         if not hasattr(env, "_moon_world"):
             return
         try:
@@ -399,11 +450,12 @@ class Renderer:
         except Exception:
             return
 
+        body, shade = (MARS, MARS_SHADE) if hasattr(env, "_sun_world") else (MOON, MOON_SHADE)
         center = self._to_screen(mx, my, cam)
         if self._on_screen(center, margin=200):
             r_px = max(3.0, mr * cam[2])
-            self.pg.draw.circle(self.surf, MOON, center, r_px)
-            self.pg.draw.circle(self.surf, MOON_SHADE, center, r_px, width=2)
+            self.pg.draw.circle(self.surf, body, center, r_px)
+            self.pg.draw.circle(self.surf, shade, center, r_px, width=2)
             soi_px = getattr(env, "moon_soi", 0.0) * cam[2]
             if 1.4 * r_px < soi_px < 2500:
                 self.pg.draw.circle(self.surf, SPACE_LINE, center, soi_px, width=1)
@@ -493,12 +545,22 @@ class Renderer:
 
         panel = self._panel(258, 168)
         self.surf.blit(panel, (10, 10))
-        # inside the moon's SOI the headline numbers go moon-relative,
-        # matching the frame the info elements switched to
-        in_moon = info.get("soi") == "moon"
-        alt_km = ((info["moon_distance"] - info["moon_radius"]) if in_moon
-                  else info["altitude"]) / 1000
-        speed = info["moon_rel_speed"] if in_moon else info["speed"]
+        # inside a secondary body's SOI the headline numbers go body-relative,
+        # matching the frame the info elements switched to; between bodies
+        # (ToMars) they go heliocentric
+        soi_name = info.get("soi")
+        in_moon = soi_name in ("moon", "mars")
+        in_sun = soi_name == "sun"
+        if in_moon:
+            alt_km = (info["moon_distance"] - info["moon_radius"]) / 1000
+            speed = info["moon_rel_speed"]
+        elif in_sun:
+            alt_km = info["sun_distance"] / 1000
+            x, y, vx, vy = env.rocket_helio()
+            speed = math.hypot(vx, vy)
+        else:
+            alt_km = info["altitude"] / 1000
+            speed = info["speed"]
         self.surf.blit(self.font_big.render(f"{alt_km:8.1f} km", True, TEXT), (24, 20))
         self.surf.blit(self.font_big.render(f"{speed:6.0f} m/s", True, TEXT), (24, 52))
         apo = info["apoapsis"]
@@ -538,7 +600,9 @@ class Renderer:
         # status badge
         badge_text = None
         if env._terminal is None and in_moon:
-            badge_text = "MOON SOI", ACCENT
+            badge_text = f"{soi_name.upper()} SOI", ACCENT
+        elif env._terminal is None and in_sun:
+            badge_text = "INTERPLANETARY", ACCENT
         elif env._terminal is None and info.get("returning"):
             badge_text = f"RETURN   {info['pad_downrange'] / 1000:.0f} km to pad", ACCENT
         elif env._terminal is None and info["in_space"]:
@@ -564,6 +628,8 @@ class Renderer:
                 "landed_on_pad": ("LANDED ON THE PAD", GOOD),
                 "landed_moon": ("LANDED ON THE MOON", GOOD),
                 "landed_moon_site": ("LANDED ON THE SITE", GOOD),
+                "landed_mars": ("LANDED ON MARS", GOOD),
+                "landed_mars_site": ("LANDED ON THE SITE", GOOD),
                 "escaped": ("ESCAPED THE PLANET", ORBIT_PATH),
                 "orbit": ("STABLE ORBIT", GOOD),
                 "time_limit": ("TIME'S UP", TEXT),

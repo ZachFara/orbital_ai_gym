@@ -318,3 +318,20 @@ full mission from the launch pad on all 48 sites: 48/48 `landed_moon_site`,
 0 crashes, mean mission return 3065 (autopilot 3040-3090). This is the
 deliverable. Other preserved checkpoints: best_94pct (45/48, 0 crashes),
 best_97pct (46/48, 1 crash).
+
+## New environment: ToMars-v0 (2026-11-11)
+
+Three-stage rocket, a star at the centre of a compact system (planet year
+3.9 h, Hohmann transfer 2.8 h, planet 0.35% of the star's mass), a
+Mars-like target with a thin atmosphere, a departure window that does not
+return within the episode. `orbital_gym/missions/to_mars.py`, presets
+`STARS`/`SYSTEMS`/`ROCKETS["mars"]`, renderer system view, tests in
+`tests/test_to_mars.py`. The scripted `MarsAutopilot` lands softly
+(1 m/s, ~100 km off the site, 15,300 steps, 3.1 km/s spare). Things learned
+building it: patched conics are useless here (the star's tide does ~1 km/s
+of work during the climb-out, so the departure is planned by simulating the
+full force model ahead and pricing the rest with free-arrival-time
+Lambert); a free-time Lambert re-planner must not hop between arrival
+times (1.8 km/s wasted before it was pinned); the moon pilot's capture loop
+descends at <= 25 m/s, so capture must happen at the parking altitude.
+No RL attempt yet.
