@@ -51,6 +51,7 @@ from ..guidance import Guidance
 from ..missions.to_mars import ToMarsEnv
 from ..missions.to_moon import ToMoonEnv
 from ..missions.to_orbit import _wrap_pi
+from ..touchdown import TouchdownRules
 
 SNAP_SKIP = ("_renderer",)
 POST_CAPTURE = ("moon_orbit", "deorbit", "pdescend")
@@ -59,6 +60,7 @@ CACHE_DIR = os.path.join(
 )
 BANK_PATH = os.path.join(CACHE_DIR, "moon_bank.pkl")
 MARS_BANK_PATH = os.path.join(CACHE_DIR, "mars_bank.pkl")
+MOON_V1_BANK_PATH = os.path.join(CACHE_DIR, "moon_v1_bank.pkl")
 
 
 def snapshot(env: Any) -> dict:
@@ -263,6 +265,14 @@ MOON_TASK = LandingTask(
     # those vs 81-94% upstream)
     site_sigma_max=0.04,
     window=1_800,  # max ttl ~1,300 (one 60 km orbit + the descent) plus slack
+)
+# v1: the same task under the landing-legs rules (ToMoon-v1); its own bank,
+# since the expert's flights end with the 5 s hold
+MOON_V1_TASK = replace(
+    MOON_TASK,
+    name="moon-v1",
+    make_env=lambda **kw: ToMoonEnv(touchdown=TouchdownRules(), **kw),
+    bank_path=MOON_V1_BANK_PATH,
 )
 # The reward scales follow the body: d_scale 2.5 radii (orbit to the far
 # side), v_scale the parking-orbit speed (934 m/s at 150 km), miss_scale and
@@ -564,6 +574,7 @@ class LandingEnv(gym.Env):
         if (
             rc.hover_cost > 0.0
             and not done
+            and not getattr(u, "_contact", False)  # sitting on the legs is not hovering
             and self.body.altitude(u._rx, u._ry, u._time) < rc.hover_alt
         ):
             reward -= rc.hover_cost
@@ -616,6 +627,12 @@ class MoonLandingEnv(LandingEnv):
     """The moon mission's landing leg (ToMoon, 60 km parking orbit)."""
 
     TASK = MOON_TASK
+
+
+class MoonV1LandingEnv(LandingEnv):
+    """The moon landing leg under the v1 rules (legs, contact limits, hold)."""
+
+    TASK = MOON_V1_TASK
 
 
 class MarsLandingEnv(LandingEnv):
@@ -672,3 +689,9 @@ class MarsLandingFromOrbit(FromOrbit):
     """`MarsLandingFromOrbit-v0`."""
 
     TASK = MARS_TASK
+
+
+class MoonLandingFromOrbitV1(FromOrbit):
+    """`MoonLandingFromOrbit-v1`."""
+
+    TASK = MOON_V1_TASK

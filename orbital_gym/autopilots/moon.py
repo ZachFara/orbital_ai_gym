@@ -126,6 +126,9 @@ class MoonAutopilot(Pilot):
         return self.body.elements(e._rx, e._ry, e._vx, e._vy, e._time)
 
     def __call__(self, info: dict) -> np.ndarray:
+        if info.get("contact"):  # v1 legs: on the surface, engine off, nose up
+            r, _v, _ang, _w, mpos, _mvel = self._state()
+            return self._act_world(math.atan2(r[1] - mpos[1], r[0] - mpos[0]), 0.0)
         s = self._local(info)
         if self.mode in ("ascend", "coast", "inject"):
             act = self._ascent(s, info)

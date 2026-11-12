@@ -32,9 +32,11 @@ import math
 from typing import Any
 
 import numpy as np
+from gymnasium import spaces
 
 from ..bodies import CelestialBody
 from ..presets import MOONS, PLANETS, Moon, Planet, Rocket
+from ..touchdown import TouchdownRules
 from .to_orbit import TWO_PI, TwoStageToOrbitEnv, _wrap_pi
 
 
@@ -68,6 +70,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         attitude_control: bool = True,
         hover_control: bool = False,
         render_mode: str | None = None,
+        touchdown: TouchdownRules | None = None,
     ):
         planet_obj = PLANETS[planet] if isinstance(planet, str) else planet
         if moon is None:
@@ -97,6 +100,12 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         self._required_angle = max(1e-6, orbit_fraction * TWO_PI)
         self._moon_d_scale = self.moon.orbit_radius
 
+        # v1 landing legs (ToMoon-v1): None reproduces v0 exactly
+        self.touchdown = touchdown
+        self._contact = False
+        self._hold = 0.0
+        self._contact_phi = 0.0
+        self._touchdown_limit: str | None = None
         super().__init__(
             planet=planet,
             rocket=rocket,
@@ -116,6 +125,10 @@ class ToMoonEnv(TwoStageToOrbitEnv):
             hover_control=hover_control,
             render_mode=render_mode,
         )
+        if touchdown is not None:
+            self.observation_space = spaces.Box(
+                -20.0, 20.0, shape=(self.OBS_SIZE + 2,), dtype=np.float32
+            )
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         # The landing site is settable per-episode (goal-conditioned training
@@ -131,6 +144,10 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         self._transfer = False
         self._last_ang = math.pi / 2.0
         self._last_site_d = 0.0
+        self._contact = False
+        self._hold = 0.0
+        self._contact_phi = 0.0
+        self._touchdown_limit = None
         obs, info = super().reset(seed=seed, options=options)
         self._last_site_d = self._moon_site_distance()
         return obs, info
@@ -196,6 +213,92 @@ class ToMoonEnv(TwoStageToOrbitEnv):
             return False
         return super()._is_escaping()
 
+    # --- v1: landing legs and the touchdown hold --------------------------------
+
+    def _substep(self, throttle: float, turn_rate: float) -> None:
+        super()._substep(throttle, turn_rate)
+        if self.touchdown is not None and self._terminal is None:
+            self._legs_contact()
+
+    def _legs_frame(self) -> tuple[float, float, float, float, float, float]:
+        """(vr, vt, tilt, a_thrust, g_m, moon_d): the moon-relative radial and
+        tangential speeds, the tilt off the local vertical, the thrust
+        acceleration, local gravity and the distance to the moon's centre."""
+        mx, my = self._moon_world()
+        mvx, mvy = self._moon_velocity()
+        px, py = self._rx - mx, self._ry - my
+        d = max(1.0, math.hypot(px, py))
+        ux, uy = px / d, py / d
+        vr = (self._vx - mvx) * ux + (self._vy - mvy) * uy
+        vt = (self._vx - mvx) * uy - (self._vy - mvy) * ux
+        tilt = _wrap_pi(self._theta - math.atan2(uy, ux))
+        a_thrust = self._throttle_actual * self.rocket.stages[self._stage].thrust / self._mass
+        return vr, vt, tilt, a_thrust, self.moon.mu / (d * d), d
+
+    def _legs_contact(self) -> None:
+        """Per physics substep: contact against the limits, lift-off, and
+        resting on the legs."""
+        rules = self.touchdown
+        assert rules is not None
+        vr, vt, tilt, a_thrust, g_m, d = self._legs_frame()
+        if not self._contact:
+            if d > self.moon.radius:
+                return
+            self._touchdown_limit = rules.violated(vr, vt, tilt)
+            if self._touchdown_limit is not None:
+                self._terminal = "crashed"
+                return
+            self._contact = True
+            self._hold = 0.0
+            mx, my = self._moon_world()
+            self._contact_phi = _wrap_pi(
+                math.atan2(self._ry - my, self._rx - mx) - self._moon_angle()
+            )
+            self._settle()
+            return
+        if a_thrust * math.cos(tilt) > g_m:
+            # lift-off: free flight resumes (the physics already moved it) and
+            # the hold clock resets
+            self._contact = False
+            self._hold = 0.0
+            return
+        self._settle()
+
+    def _legs_step(self, moon_d: float) -> float | None:
+        """Per step, after the physics: the hold clock while on the legs and
+        the landing once it runs out. None while airborne (the normal shaping
+        applies); 0.0 for a crash the substeps found."""
+        rules = self.touchdown
+        assert rules is not None
+        if self._terminal == "crashed":
+            return 0.0
+        if not self._contact:
+            return None
+        _vr, _vt, _tilt, a_thrust, g_m, _d = self._legs_frame()
+        if a_thrust < rules.engine_off_fraction * g_m:
+            self._hold += self.step_duration
+        else:
+            self._hold = 0.0  # the engine came on: start the hold over
+        if self._hold >= rules.hold_seconds:
+            if self._moon_site_distance() <= self.moon_site_radius:
+                self._terminal = "landed_moon_site"
+                return self.moon_site_bonus
+            self._terminal = "landed_moon"
+            return self.moon_land_bonus
+        return 0.0
+
+    def _settle(self) -> None:
+        """Rest on the legs: the contact bearing on the surface, carried round
+        with the (tidally locked) moon, at rest in the moon-centred frame.
+        Every speed in this env (the v0 limit, the instruments, the HUD) is
+        measured against the moon's centre, not the turning ground, so a
+        lander at rest reads zero and lifts off with no sideways kick."""
+        a = self._moon_angle() + self._contact_phi
+        mx, my = self._moon_world()
+        radius = self.moon.radius
+        self._rx, self._ry = mx + radius * math.cos(a), my + radius * math.sin(a)
+        self._vx, self._vy = self._moon_velocity()
+
     # --- Physics hook ---------------------------------------------------------
 
     def _extra_acceleration(
@@ -210,7 +313,11 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         # touchdown anywhere on the moon is a landing (a smaller bonus off
         # the site); the crash penalty is applied by step() from _terminal.
         moon_d = self._moon_distance()
-        if moon_d <= self.moon.radius:
+        if self.touchdown is not None:
+            legs = self._legs_step(moon_d)
+            if legs is not None:
+                return legs
+        elif moon_d <= self.moon.radius:
             mvx, mvy = self._moon_velocity()
             rel_speed = math.hypot(self._vx - mvx, self._vy - mvy)
             site_d = self._moon_site_distance()
@@ -317,7 +424,16 @@ class ToMoonEnv(TwoStageToOrbitEnv):
             ],
             dtype=np.float32,
         )
-        return np.concatenate([super()._obs(), extras])
+        if self.touchdown is None:
+            return np.concatenate([super()._obs(), extras])
+        legs = np.array(
+            [
+                1.0 if self._contact else 0.0,  # on the legs
+                min(1.0, self._hold / self.touchdown.hold_seconds),  # hold progress
+            ],
+            dtype=np.float32,
+        )
+        return np.concatenate([super()._obs(), extras, legs])
 
     def _info(self):
         info = super()._info()
@@ -355,4 +471,8 @@ class ToMoonEnv(TwoStageToOrbitEnv):
             info["orbit"] = bool(energy < 0.0 and peri > 0.0)
         else:
             info["soi"] = "planet"
+        if self.touchdown is not None:
+            info["contact"] = self._contact
+            info["hold_progress"] = min(1.0, self._hold / self.touchdown.hold_seconds)
+            info["touchdown_limit"] = self._touchdown_limit
         return info

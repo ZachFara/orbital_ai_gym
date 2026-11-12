@@ -7,6 +7,7 @@ env = gym.make("TwoStageToOrbit-v0")           # launch to a stable orbit
 env = gym.make("OrbitAndReturn-v0")            # ...then come home to the pad
 env = gym.make("ToMoon-v0")                    # orbit, hold, land on the moon
 env = gym.make("ToMars-v0")                    # three stages, a star, a Mars
+env = gym.make("ToMoon-v1")                    # ...on legs: contact limits, 5 s hold
 env = gym.make("TwoStageToOrbit-v0", planet="earth", max_episode_steps=8000)
 
 The practice ladder: a mission's hardest leg on its own, from a cached
@@ -39,6 +40,7 @@ from .presets import (
     describe,
     total_delta_v,
 )
+from .touchdown import TouchdownRules
 
 __version__ = "0.1.0"
 __all__ = [
@@ -57,6 +59,7 @@ __all__ = [
     "StarSystem",
     "ToMarsEnv",
     "ToMoonEnv",
+    "TouchdownRules",
     "TwoStageToOrbitEnv",
     "describe",
     "total_delta_v",
@@ -84,6 +87,13 @@ register(
     entry_point="orbital_gym.missions.to_mars:ToMarsEnv",
     max_episode_steps=None,
 )
+# v1 landing rules (decision 0010): legs with contact limits and a hold
+register(
+    id="ToMoon-v1",
+    entry_point="orbital_gym.missions.to_moon:ToMoonEnv",
+    max_episode_steps=None,
+    kwargs={"touchdown": TouchdownRules()},
+)
 # The practice ladder (decision 0008): one leg of a mission, from a cached
 # expert state. The wrapper enforces its own step window.
 register(
@@ -94,5 +104,10 @@ register(
 register(
     id="MarsLandingFromOrbit-v0",
     entry_point="orbital_gym.rl.landing:MarsLandingFromOrbit",
+    max_episode_steps=None,
+)
+register(
+    id="MoonLandingFromOrbit-v1",
+    entry_point="orbital_gym.rl.landing:MoonLandingFromOrbitV1",
     max_episode_steps=None,
 )
