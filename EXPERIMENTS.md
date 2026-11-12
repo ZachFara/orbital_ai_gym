@@ -335,3 +335,21 @@ Lambert); a free-time Lambert re-planner must not hop between arrival
 times (1.8 km/s wasted before it was pinned); the moon pilot's capture loop
 descends at <= 25 m/s, so capture must happen at the parking altitude.
 No RL attempt yet.
+
+## 2026-11-11 23:16 - ppo-v1-legs-ft2  (`41cca0c8`, FINISHED)
+
+**Hypothesis:** C2 second attempt: ft1 never saw a success (the v0 policy touches down at 5-8 m/s and the 5 m/s vertical limit makes every landing a crash: 0% on-site over 1.9M steps at level 0.3). Rule curriculum: the contact limits start 8 m/s looser (13 vertical / 11 horizontal) and tighten by 1 m/s each time the probe clears 80% on-site, before the level advances; BC anchor 0.1 toward the v1 expert's 1 m/s touchdowns and its engine-off hold. Evaluation always uses the real v1 rules.
+
+**Outcome:** level reached 1.00; final on-site 81%, soft 94%, crash 6%, median miss 5.0 km, 12,001,280 steps in 38 min
+
+**Diagnosis:** (fill in with `python scripts/explog.py diagnosis <run> ...`) level history: 4874k:0.45, 5079k:0.50, 5201k:0.55, 5283k:0.60, 5447k:0.65, 5570k:0.70, 5857k:0.75, 6184k:0.80, 6307k:0.85, 6471k:0.90, 6594k:0.95, 6717k:1.00
+
+**Key metrics:** final/level=1, final/on_site=0.812, final/soft=0.938, final/crash=0.0625, final/timeout=0, final/miss_km_med=5, final/rel_med=0, final/dv_mean=3.9e+03, final/native=471, final/full_mission=2.95e+03
+
+Checkpoint `models/ppo-v1-legs-ft2/best.zip` under the v1 landing rules (legs: 5 m/s vertical,
+3 m/s horizontal, 15 deg, 5 s engine-off hold). From parking-orbit entry on
+32 sites: on-site 94%  soft 97%  crash 3%  median miss 2.6 km  mean full-mission return 2994. Full mission from the launch pad on 48 sites
+(`fly_moon_policy.py --task moon-v1 --sites 48`): on-site 94%  soft 96%  mean mission return 3034  (autopilot alone: landed_moon_site, ~3040-3090). The run's
+curriculum and evaluations are in MLflow (`python scripts/explog.py show ppo-v1-legs-ft2`).
+Recorded automatically when the run ended; the diagnosis line above is the
+run's own summary and may need the owner's reading of the curves.
