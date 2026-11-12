@@ -41,6 +41,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from ..autopilots import MoonAutopilot
 from ..missions.to_moon import ToMoonEnv
 from ..missions.to_orbit import _wrap_pi
 
@@ -103,8 +104,6 @@ class StateBank:
 
 def build_bank(n_sites: int = 24, coast_stride: int = 3, verbose: bool = True) -> StateBank:
     """Fly the orbit-first expert to n_sites sites; keep every from-orbit state."""
-    from scripts.autopilot_demo import MoonAutopilot  # scripts/ on sys.path
-
     bank = StateBank()
     sites = np.linspace(-math.pi, math.pi, n_sites, endpoint=False)
     for k, site in enumerate(sites):

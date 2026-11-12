@@ -56,7 +56,7 @@ mccabe.max-complexity = 12
 # baseline: functions above the complexity limit when the gate was added
 "orbital_gym/missions/to_orbit.py" = ["C901"]
 "orbital_gym/rendering.py" = ["C901"]
-"scripts/autopilot_demo.py" = ["C901"]
+"orbital_gym/autopilots/*.py" = ["C901"]
 "scripts/fly_manual.py" = ["C901"]
 "scripts/train_guided.py" = ["C901"]
 "scripts/train_her.py" = ["C901"]
@@ -82,6 +82,7 @@ module = [
     "orbital_gym.missions.to_moon",
     "orbital_gym.missions.to_mars",
     "orbital_gym.rl.moon_landing",
+    "orbital_gym.autopilots.*",
     "scripts.autopilot_demo",
     "scripts.fly_manual",
     "scripts.fly_moon_policy",
@@ -111,10 +112,10 @@ source_modules = ["orbital_gym.presets"]
 forbidden_modules = ["orbital_gym.missions", "orbital_gym.rendering", "orbital_gym.rl"]
 
 [[tool.importlinter.contracts]]
-name = "missions do not import the RL layer"
+name = "missions do not import the layers above them"
 type = "forbidden"
 source_modules = ["orbital_gym.missions"]
-forbidden_modules = ["orbital_gym.rl"]
+forbidden_modules = ["orbital_gym.rl", "orbital_gym.autopilots"]
 
 [[tool.importlinter.contracts]]
 name = "rendering is a view: only presets below it"
@@ -127,10 +128,12 @@ name = "the package never imports scripts or tests"
 type = "forbidden"
 source_modules = ["orbital_gym"]
 forbidden_modules = ["scripts", "tests", "tools"]
-# baseline: the RL state bank builds from the pilots that still live in
-# scripts/. Removed by the PROGRESS.md task that moves the pilots into
-# orbital_gym/autopilots/.
-ignore_imports = ["orbital_gym.rl.moon_landing -> scripts.autopilot_demo"]
+
+[[tool.importlinter.contracts]]
+name = "autopilots sit above missions and below rl"
+type = "forbidden"
+source_modules = ["orbital_gym.missions", "orbital_gym.rendering", "orbital_gym.presets"]
+forbidden_modules = ["orbital_gym.autopilots"]
 
 [[tool.importlinter.contracts]]
 name = "tests and tools are leaves"

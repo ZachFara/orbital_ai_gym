@@ -22,8 +22,8 @@ missions → (rendering, autopilots) → rl → scripts. See `DESIGN.md`.
 ## Directory layout
 
 ```
-orbital_gym/            the package (presets.py, missions/, rendering.py, rl/)
-scripts/                command-line entry points: train, fly, evaluate, autopilots, explog
+orbital_gym/            the package (presets.py, missions/, rendering.py, autopilots/, rl/)
+scripts/                command-line entry points: train, fly, evaluate, autopilot demo, explog
 tests/                  pytest suite (smoke test + one module per mission + rl)
 tools/                  repository tooling run by `make check` (layout, commit-msg)
 docs/decisions/         numbered decision records

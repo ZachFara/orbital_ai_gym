@@ -48,8 +48,8 @@ except ImportError:
     raise SystemExit("stable-baselines3 not installed; run: pip install -e '.[train]'") from None
 
 import gymnasium as gym
-from autopilot_demo import Autopilot, MoonAutopilot, ReturnAutopilot
 
+from orbital_gym.autopilots import Autopilot, MoonAutopilot, ReturnAutopilot
 from orbital_gym.missions.orbit_and_return import OrbitAndReturnEnv
 from orbital_gym.missions.to_moon import ToMoonEnv
 from orbital_gym.missions.to_orbit import TwoStageToOrbitEnv

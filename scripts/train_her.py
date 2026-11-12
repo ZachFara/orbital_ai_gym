@@ -82,8 +82,7 @@ from gymnasium import spaces
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from autopilot_demo import MoonAutopilot
-
+from orbital_gym.autopilots import MoonAutopilot
 from orbital_gym.missions.to_moon import ToMoonEnv
 
 GOAL_DIM = 2  # the site as a unit (cos, sin) bearing in the moon body frame
