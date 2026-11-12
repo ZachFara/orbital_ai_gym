@@ -3,7 +3,7 @@
 ## Status (2026-11-12)
 
 Phase 1 merged (PR #1); repository public with branch protection. Phase 2
-in progress: A1-A5 done. Four missions exist and are solved by scripted pilots;
+in progress: A1-A6 done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -44,13 +44,17 @@ tests for new behaviour, PR merged, this file updated.
   keep `train_ppo.py` as the plain baseline. Done: README no longer
   mentions them; their `pyproject.toml` baseline entries are deleted.
   Depends on: nothing.
-- [ ] **A6 Trainer defaults and `TrainingRun`.** `train_moon_rl.py`
-  defaults become the v15 configuration (exp throttle, extra obs, miss
-  potential, hover cost, gamma 0.9995, bounded means, BC anchor); the
-  `main()` body becomes a `TrainingRun` class; add `--video` via
-  `gymnasium.wrappers.RecordVideo`. Done: a bare
-  `python scripts/train_moon_rl.py --name x --hypothesis y` reproduces the
-  v15 setup; the file leaves the complexity baseline. Depends on A5.
+- [x] **A6 Trainer defaults and `TrainingRun`.** The trainer lives in
+  `orbital_gym/rl/trainer.py` (strict-typed): `TrainConfig` whose defaults
+  are the v15 recipe, `BoundedPPO`, `Curriculum`, `PeriodicEval`,
+  `TrainingRun`; `scripts/train_moon_rl.py` is an argparse front generated
+  from the config's fields (`--r-<field>` for the reward). `--video` is on
+  `fly_moon_policy.py` (`.mp4` through moviepy, `.gif` through imageio);
+  `RecordVideo` does not fit because the scripted prefix runs in the raw
+  env and the policy phase bypasses `reset()`. Done: a bare
+  `python scripts/train_moon_rl.py --name x --hypothesis y` is the v15
+  setup (`tests/test_trainer.py`); the file left the complexity and typing
+  baselines; `--eval 8` on `best_100pct.zip` still lands 8/8. Depends on A5.
 - [ ] **A7 HUD frame fix.** The `vr`/`vt` rows show body-relative values
   when inside a secondary body's SOI. Done: a render test asserts the HUD
   reads the moon-relative numbers after a moon landing. Depends on A3.
@@ -119,7 +123,7 @@ where listed) and delete its entry from `pyproject.toml`.
 - [ ] F4 `orbital_gym/autopilots/*` (also the `__call__` methods and
   `lambert` complexity; folds into A2)
 - [ ] F5 `scripts/fly_manual.py`, `fly_moon_policy.py`, `train_ppo.py`
-- [ ] F6 `scripts/train_moon_rl.py` (folds into A6)
+- [x] F6 `scripts/train_moon_rl.py` (done in A6)
 - [ ] F7 `tests/test_env.py`, `test_orbit_and_return.py`, `test_to_moon.py`,
   `test_to_mars.py`
 
@@ -137,4 +141,4 @@ hold; background training runs allowed; tasks strictly in listed order.
 
 ## Next steps
 
-1. A6 (trainer defaults and `TrainingRun`), then A7 onward in order.
+1. A7 (HUD frame fix), then B1 onward in order.
