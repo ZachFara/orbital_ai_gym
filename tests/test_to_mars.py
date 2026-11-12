@@ -123,7 +123,7 @@ def test_mars_autopilot_lands_softly_on_the_target():
     ahead departure through the star's tide, Lambert midcourse corrections,
     capture into a parking orbit, deorbit and powered descent. It lands soft,
     well off the site -- putting it on the site is the learning problem."""
-    from scripts.autopilot_demo import MarsAutopilot
+    from orbital_gym.autopilots import MarsAutopilot
 
     env = ToMarsEnv()
     _obs, info = env.reset()

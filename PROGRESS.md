@@ -1,9 +1,9 @@
 # PROGRESS
 
-## Status (2026-11-11)
+## Status (2026-11-12)
 
-Phase 1 (repository setup) is complete on branch `chore/agent-setup`,
-awaiting approval. Four missions exist and are solved by scripted pilots;
+Phase 1 merged (PR #1); repository public with branch protection. Phase 2
+in progress: A1 done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -16,7 +16,7 @@ tests for new behaviour, PR merged, this file updated.
 
 ### A. Structure (the "cleanup PR" series)
 
-- [ ] **A1 Move the pilots into the package.** Create
+- [x] **A1 Move the pilots into the package.** Create
   `orbital_gym/autopilots/` (`base.py`, `orbit.py`, `moon.py`, `mars.py`,
   plus `lambert.py`), re-export from `scripts/autopilot_demo.py` so the
   CLI is unchanged. Done: `rl/moon_landing.py` imports from the package;
@@ -116,8 +116,8 @@ where listed) and delete its entry from `pyproject.toml`.
   complexity)
 - [ ] F3 `orbital_gym/missions/to_moon.py`, `to_mars.py`,
   `orbit_and_return.py` and `orbital_gym/rl/moon_landing.py`
-- [ ] F4 `scripts/autopilot_demo.py` (also the `__call__` methods and
-  `lambert` complexity; folds into A1/A2)
+- [ ] F4 `orbital_gym/autopilots/*` (also the `__call__` methods and
+  `lambert` complexity; folds into A2)
 - [ ] F5 `scripts/fly_manual.py`, `fly_moon_policy.py`, `train_ppo.py`
 - [ ] F6 `scripts/train_moon_rl.py` (folds into A6); `train_guided.py` and
   `train_her.py` are deleted by A5 instead
@@ -126,27 +126,16 @@ where listed) and delete its entry from `pyproject.toml`.
 
 ## Open Questions
 
-1. The `edit` auto-commits on `master` (see history) came from a local
-   tool. With branch protection on, pushes of such commits are rejected.
-   Should that tool be pointed at a branch, or turned off for this repo?
-2. `uv.lock` arrived in an auto-commit. Keep it as the record of a working
-   set (decision 0001 assumes yes) or drop it until the package is
-   published with a proper `[tool.uv]` section?
-3. Strict mypy is applied to new code only via the baseline (decision
-   0002). Is the burn-down list F1–F7 the agreed route, or should typing
-   the old modules be one dedicated task before any Phase 2 feature work?
-4. Phase 2 ordering: A (structure) before B (ladder) is the proposal, since
-   B1/B2 depend on A1/A3. Confirm or reorder.
-5. Branch protection could not be applied: GitHub returns 403 ("Upgrade to
-   GitHub Pro or make this repository public") for protection rules on a
-   private repository under a free plan. The intended settings are in
-   decision 0004. Options: make the repository public now (it is headed
-   there for publishing anyway), or upgrade the plan. Until then the
-   "never commit to master" rule is enforced only by convention and the
-   local hooks.
+Decided 2026-11-12 (owner): self-merge on green CI; repository made
+public and protected (decision 0004 applied); typing ratchet as in
+decision 0002; `uv.lock` kept; no publishing outside this repository
+without the owner; landing-legs defaults 5 m/s / 3 m/s / 15 deg / 5 s
+hold; background training runs allowed; tasks strictly in listed order.
+
+1. The `edit` auto-commits on `master` came from a local tool; pushes of
+   such commits are now rejected by branch protection. Point that tool at
+   a branch or disable it for this repo.
 
 ## Next steps
 
-1. Approve Phase 1 (this PR).
-2. Decide Open Questions 1–4.
-3. Phase 2 starts with A1.
+1. A2 (explicit `Autopilot` hierarchy), then A3 onward in order.

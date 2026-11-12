@@ -101,7 +101,7 @@ def test_moon_autopilot_soft_lands_on_the_moon():
     the site -- putting it ON the site is the learning problem
     (train_guided.py), not the autopilot's job.
     """
-    from scripts.autopilot_demo import MoonAutopilot
+    from orbital_gym.autopilots import MoonAutopilot
 
     env = ToMoonEnv()
     _obs, info = env.reset()
