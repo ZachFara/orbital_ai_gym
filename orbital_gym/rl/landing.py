@@ -695,3 +695,11 @@ class MoonLandingFromOrbitV1(FromOrbit):
     """`MoonLandingFromOrbit-v1`."""
 
     TASK = MOON_V1_TASK
+
+
+# the trainable tasks by name (TrainConfig.task, fly_moon_policy --task)
+LANDING_ENVS: dict[str, type[LandingEnv]] = {
+    "moon": MoonLandingEnv,
+    "moon-v1": MoonV1LandingEnv,
+    "mars": MarsLandingEnv,
+}
