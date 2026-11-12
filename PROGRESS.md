@@ -3,7 +3,7 @@
 ## Status (2026-11-12)
 
 Phase 1 merged (PR #1); repository public with branch protection. Phase 2
-in progress: A1-A7, B1 and B2 done. Four missions exist and are solved by scripted pilots;
+in progress: A1-A7 and B1-B3 done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -82,10 +82,16 @@ tests for new behaviour, PR merged, this file updated.
   whole orbit). Done: `gym.make` works; README documents it;
   `tests/test_landing.py` + smoke cover it; the moon task is bit-identical
   (v15 `--eval 8` reproduces the same eight returns). Depends on A3, B1.
-- [ ] **B3 Benchmark protocol and baselines.** Fixed site grid and seeds
-  per env; `scripts/benchmark.py` producing the table (random, autopilot,
-  PPO); table in README with GIFs. Done: table reproducible by one
-  command. Depends on B1.
+- [x] **B3 Benchmark protocol and baselines.** `orbital_gym/benchmark.py`
+  (protocol, the three baselines, `run`, `table`) and `scripts/benchmark.py`
+  (one command, `--ppo ENV=path`, `--record DIR` for GIFs); table and four
+  GIFs in the README (decision 0009). Found and fixed on the way: the
+  direct-descent moon pilot crashes at every site but the preset (the
+  benchmark uses the orbit-first pilot), `TwoStageToOrbit-v0` reported no
+  success when the pilot held orbit to the time limit (now success),
+  `MarsLandingFromOrbit-v0` inherited the moon's 1,800-step window and
+  timed out 11/16 (the window is now per task: 5,200). Done: table
+  reproducible by one command; `tests/test_benchmark.py`. Depends on B1.
 - [ ] **B4 Camera zoom.** Keyboard, mouse wheel and on-screen buttons in
   `rendering.py`; exposed in `fly_manual.py`. Done: zoom persists across
   the rocket and map views; a render test exercises it. Depends on A3.
@@ -154,4 +160,4 @@ hold; background training runs allowed; tasks strictly in listed order.
 
 ## Next steps
 
-1. B3 (benchmark protocol and baselines), then B4 onward in order.
+1. B4 (camera zoom), then C1 onward in order.

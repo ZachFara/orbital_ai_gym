@@ -500,7 +500,7 @@ class TwoStageToOrbitEnv(gym.Env):
         alt = self._altitude()
         rho = self.planet.density(alt)
         speed = math.hypot(self._vx, self._vy)
-        return {
+        info: dict[str, Any] = {
             "time": self._time,
             "altitude": alt,
             "speed": speed,
@@ -526,8 +526,17 @@ class TwoStageToOrbitEnv(gym.Env):
                 and peri > self.planet.space_altitude
             ),
             "termination": self._terminal,
-            "success": self._terminal in self.SUCCESS,
         }
+        info["success"] = self._success(info["orbit"])
+        return info
+
+    def _success(self, orbit: bool) -> bool:
+        """Mission accomplished: a SUCCESS termination, or, for the mission
+        whose goal IS the orbit, still in one when time runs out (the env
+        terminates on orbit only with `terminate_on_orbit`)."""
+        if self._terminal in self.SUCCESS:
+            return True
+        return self.SUCCESS == ("orbit",) and self._terminal == "time_limit" and orbit
 
     # Test/debug hook: place the rocket anywhere with a given velocity.
     def _teleport(self, rx, ry, vx, vy, theta=None):

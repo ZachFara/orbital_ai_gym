@@ -236,6 +236,7 @@ class LandingTask:
     on_site: str  # the mission's on-site termination
     soft: tuple[str, ...]  # every soft-touchdown termination
     site_sigma_max: float  # rad; cap on the descent-start site offset (see LandingEnv)
+    window: int  # steps an episode may take from parking-orbit entry
     reward_scales: dict[str, float] = field(default_factory=dict)  # RewardConfig overrides
 
     @property
@@ -261,6 +262,7 @@ MOON_TASK = LandingTask(
     # real from-orbit task never requires (measured, v5: 0-9% on-site for
     # those vs 81-94% upstream)
     site_sigma_max=0.04,
+    window=1_800,  # max ttl ~1,300 (one 60 km orbit + the descent) plus slack
 )
 # The reward scales follow the body: d_scale 2.5 radii (orbit to the far
 # side), v_scale the parking-orbit speed (934 m/s at 150 km), miss_scale and
@@ -275,6 +277,7 @@ MARS_TASK = LandingTask(
     on_site="landed_mars_site",
     soft=("landed_mars", "landed_mars_site"),
     site_sigma_max=0.047,
+    window=5_200,  # max ttl 4,744 (one 230 km orbit + the descent) plus slack
     reward_scales=dict(
         d_scale=850_000.0,
         v_scale=934.0,
@@ -300,7 +303,7 @@ class LandingEnv(gym.Env):
         level: float = 0.0,
         reward: RewardConfig | None = None,
         gamma: float = 0.995,
-        window: int = 1_800,
+        window: int | None = None,
         window_slack: int = 400,
         cap_mult: float = 1.0,
         state_noise: float = 1.0,
@@ -320,7 +323,7 @@ class LandingEnv(gym.Env):
         self.level = float(level)
         self.rc = copy.copy(reward) if reward is not None else task.default_reward
         self.gamma = gamma
-        self.window = window
+        self.window = task.window if window is None else window
         self.window_slack = window_slack
         self.cap_mult = cap_mult
         self.state_noise = state_noise
@@ -340,7 +343,7 @@ class LandingEnv(gym.Env):
         n = self.env.observation_space.shape[0] + 1 + (self.N_EXTRA if extra_obs else 0)
         self.observation_space = spaces.Box(-20.0, 20.0, (n,), np.float32)
         self._t = 0
-        self._cap = window
+        self._cap = self.window
         self._phi = 0.0
         self._dv0 = 0.0
         self.start_ttl = 0
