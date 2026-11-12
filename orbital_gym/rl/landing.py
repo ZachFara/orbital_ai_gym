@@ -55,9 +55,23 @@ from ..touchdown import TouchdownRules
 
 SNAP_SKIP = ("_renderer",)
 POST_CAPTURE = ("moon_orbit", "deorbit", "pdescend")
-CACHE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "cache"
-)
+
+
+def _cache_dir() -> str:
+    """Where the expert state banks are cached: $ORBITAL_GYM_CACHE, else
+    `cache/` in a source checkout (next to pyproject.toml), else the user's
+    cache directory (an installed package never writes into site-packages)."""
+    env = os.environ.get("ORBITAL_GYM_CACHE")
+    if env:
+        return env
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if os.path.exists(os.path.join(root, "pyproject.toml")):
+        return os.path.join(root, "cache")
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "orbital_gym")
+
+
+CACHE_DIR = _cache_dir()
 BANK_PATH = os.path.join(CACHE_DIR, "moon_bank.pkl")
 MARS_BANK_PATH = os.path.join(CACHE_DIR, "mars_bank.pkl")
 MOON_V1_BANK_PATH = os.path.join(CACHE_DIR, "moon_v1_bank.pkl")

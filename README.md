@@ -125,8 +125,16 @@ back to the pad and the hold progress (which doubles as the phase flag).
 ## Install
 
 ```bash
-pip install -e ".[render,dev]"     # gymnasium + numpy, pygame, pytest
+pip install orbital-gym             # the envs (gymnasium + numpy); once released on PyPI
+pip install "orbital-gym[render]"   # + pygame for the renderer
+pip install -e ".[render,train,dev]"  # from a checkout: + SB3/MLflow for training, the dev tools
 ```
+
+Ids are registered bare (`ToMoon-v0`) and namespaced (`orbital_gym/ToMoon-v0`),
+the Gymnasium convention for third-party packages; both are the same env.
+The reference moon-landing policy ships in the repository as
+`docs/checkpoints/moon_landing_v0_ppo.zip` (and is attached to every GitHub
+release), so the benchmark's PPO row reproduces from a clean clone.
 
 ## Quickstart
 
@@ -275,7 +283,7 @@ the practice ids). Reproduce with one command (the `--ppo` model is the
 reference checkpoint, `EXPERIMENTS.md`; GIFs below are its `--record`):
 
 ```bash
-python scripts/benchmark.py --ppo MoonLandingFromOrbit-v0=models/ppo-zem-v15-polish/best_100pct.zip --record docs/media
+python scripts/benchmark.py --ppo MoonLandingFromOrbit-v0=docs/checkpoints/moon_landing_v0_ppo.zip --record docs/media
 ```
 
 | env | policy | episodes | success | mean return | mean dv (m/s) | mean steps | outcomes |

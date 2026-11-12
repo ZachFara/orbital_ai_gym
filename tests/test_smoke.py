@@ -38,6 +38,14 @@ def test_package_imports_and_registers_every_mission() -> None:
         env.close()
 
 
+def test_namespaced_ids_alias_the_bare_ones() -> None:
+    assert set(orbital_gym.ENV_IDS) == set(ENV_IDS)
+    for env_id in ENV_IDS:
+        spec = gym.spec(env_id)
+        alias = gym.spec(f"orbital_gym/{env_id}")
+        assert alias.entry_point == spec.entry_point and alias.kwargs == spec.kwargs
+
+
 def test_practice_id_knobs_and_a_short_episode() -> None:
     full = gym.make("MoonLandingFromOrbit-v0")
     easy = gym.make("MoonLandingFromOrbit-v0", level=0.0, extra_obs=False, site_noise=0.0)

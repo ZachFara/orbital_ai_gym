@@ -66,6 +66,9 @@ Tool versions and the dev extra are in `pyproject.toml`.
 - Under the v1 landing rules (`touchdown=TouchdownRules()`) a landing is a
   5 s hold on the legs; the pilots sit still when `info["contact"]` is set.
   Contact is checked per physics substep (decision 0010).
+- Expert state banks cache in `$ORBITAL_GYM_CACHE`, else `cache/` in a
+  checkout, else `~/.cache/orbital_gym` (decision 0011). Releases are tags;
+  the owner publishes.
 - The README benchmark table is the output of `python scripts/benchmark.py`
   (decision 0009). A change that moves a row ships with the regenerated
   table.
