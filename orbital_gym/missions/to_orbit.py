@@ -259,6 +259,12 @@ class TwoStageToOrbitEnv(gym.Env):
             self.render()
         return self._obs(), float(reward), terminated, truncated, self._info()
 
+    @property
+    def renderer(self):
+        """The live `Renderer` (None before the first render), for scripts
+        that forward pygame events to it (zoom keys, wheel, buttons)."""
+        return self._renderer
+
     def render(self):
         if self.render_mode is None:
             return None

@@ -82,3 +82,31 @@ def test_hud_reads_moon_relative_numbers_after_a_moon_landing() -> None:
     assert info["speed"] > 500.0 and math.hypot(info["vr"], info["vt"]) > 500.0
     # the headline frame is the one the renderer's SOI lookup picked
     assert u._renderer._soi()[0] == "moon"
+
+
+def test_zoom_persists_across_the_rocket_and_map_views() -> None:
+    import pygame
+
+    env = ToMoonEnv(render_mode="rgb_array")
+    env.reset()
+    pilot = MoonAutopilot(env)
+    base = _frame(env)
+    r: Any = env.renderer
+    assert r.zoom == 1.0
+    # a key, a wheel notch and a click on the "+" button, one step each
+    assert r.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_EQUALS))
+    assert r.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=1))
+    plus = next(rect for label, rect, _ in r._zoom_buttons() if label == "+")
+    assert r.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=plus.center))
+    assert r.zoom == pytest.approx(1.25**3)
+    assert not r.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a))
+    assert not np.array_equal(_frame(env), base)  # the framing changed
+    _fly_to(env, pilot, lambda i: i["orbit_progress"] >= 1.0)
+    _frame(env, settle=30)  # the map view now
+    assert r.zoom == pytest.approx(1.25**3)  # survived the view change
+    ppm_zoomed = r._camera()[2]
+    r.set_zoom(1.0)
+    assert r._camera()[2] == pytest.approx(ppm_zoomed / 1.25**3, rel=0.05)
+    r.set_zoom(1e9)
+    assert r.zoom == 50.0  # clamped
+    assert r.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_0)) and r.zoom == 1.0

@@ -30,6 +30,8 @@ from typing import ClassVar
 import numpy as np
 
 W, H = 960, 720
+ZOOM_STEP = 1.25  # per key press, wheel notch or button click
+ZOOM_MIN, ZOOM_MAX = 0.1, 50.0
 
 SPACE = (5, 7, 16)
 SKY = (96, 154, 209)
@@ -106,6 +108,7 @@ class Renderer:
         self._span = None  # smoothed view half-width, m
         self._blend = 0.0  # smoothed rocket-view -> map-view factor
         self._fblend = 0.0  # smoothed planet-focus -> moon-focus factor
+        self.zoom = 1.0  # the user's multiplier on the automatic framing
 
     # --- camera ---------------------------------------------------------------
 
@@ -205,7 +208,74 @@ class Renderer:
         bias = 0.18 * self._span * (1.0 - m)
         cx = _lerp(env._rx + ux * bias, fx, m)
         cy = _lerp(env._ry + uy * bias, fy, m)
-        return cx, cy, (W / 2) / self._span
+        return cx, cy, (W / 2) / self.view_span
+
+    @property
+    def view_span(self) -> float:
+        """Half-width of the view (m): the smoothed automatic framing over the
+        user's zoom, so the zoom persists across the rocket and map views."""
+        return (self._span if self._span is not None else 1500.0) / self.zoom
+
+    # --- zoom -------------------------------------------------------------------
+
+    def set_zoom(self, zoom: float) -> None:
+        self.zoom = max(ZOOM_MIN, min(ZOOM_MAX, float(zoom)))
+
+    def zoom_by(self, factor: float) -> None:
+        self.set_zoom(self.zoom * factor)
+
+    def _zoom_buttons(self):
+        """The on-screen buttons: (label, rect, factor); factor None resets."""
+        pg = self.pg
+        x, y, s = W - 44, H - 118, 30
+        return [
+            ("+", pg.Rect(x, y, s, s), ZOOM_STEP),
+            ("-", pg.Rect(x, y + s + 6, s, s), 1.0 / ZOOM_STEP),
+            ("1", pg.Rect(x, y + 2 * (s + 6), s, s), None),
+        ]
+
+    def handle_event(self, event) -> bool:
+        """Zoom from a pygame event: + / = / keypad + zoom in, - / keypad -
+        zoom out, 0 resets; the mouse wheel; a click on the on-screen
+        buttons. Returns whether the event was consumed. In human mode the
+        mouse events are read by `draw()` itself; scripts that drain the
+        event queue (fly_manual) forward every event here."""
+        pg = self.pg
+        if event.type == pg.KEYDOWN:
+            if event.key in (pg.K_PLUS, pg.K_EQUALS, pg.K_KP_PLUS):
+                self.zoom_by(ZOOM_STEP)
+            elif event.key in (pg.K_MINUS, pg.K_KP_MINUS):
+                self.zoom_by(1.0 / ZOOM_STEP)
+            elif event.key in (pg.K_0, pg.K_KP0):
+                self.set_zoom(1.0)
+            else:
+                return False
+            return True
+        if event.type == pg.MOUSEWHEEL:
+            self.zoom_by(ZOOM_STEP if event.y > 0 else 1.0 / ZOOM_STEP)
+            return True
+        if event.type == pg.MOUSEBUTTONDOWN and event.button == 1:
+            for _label, rect, factor in self._zoom_buttons():
+                if rect.collidepoint(event.pos):
+                    if factor is None:
+                        self.set_zoom(1.0)
+                    else:
+                        self.zoom_by(factor)
+                    return True
+        return False
+
+    def _draw_zoom_controls(self):
+        pg = self.pg
+        for label, rect, _factor in self._zoom_buttons():
+            pg.draw.rect(self.surf, BAR_BG, rect, border_radius=5)
+            pg.draw.rect(self.surf, TEXT_DIM, rect, width=1, border_radius=5)
+            t = self.font_big.render(label, True, TEXT)
+            self.surf.blit(
+                t, (rect.centerx - t.get_width() / 2, rect.centery - t.get_height() / 2 + 1)
+            )
+        if abs(self.zoom - 1.0) > 1e-9:
+            t = self.font_small.render(f"zoom x{self.zoom:.2g}", True, TEXT_DIM)
+            self.surf.blit(t, (W - 14 - t.get_width(), H - 122 - t.get_height()))
 
     def _to_screen(self, x, y, cam):
         cx, cy, ppm = cam
@@ -529,7 +599,7 @@ class Renderer:
     def _draw_rocket(self, cam):
         pg = self.pg
         env = self.env
-        size = max(9.0, min(24.0, 24.0 * (1500.0 / self._span) ** 0.22))
+        size = max(9.0, min(24.0, 24.0 * (1500.0 / self.view_span) ** 0.22))
 
         d = env._debris
         if d is not None:
@@ -702,6 +772,9 @@ class Renderer:
         self._draw_hud()
 
         if self.mode == "human":
+            for event in pg.event.get(eventtype=[pg.MOUSEWHEEL, pg.MOUSEBUTTONDOWN]):
+                self.handle_event(event)
+            self._draw_zoom_controls()
             self.window.blit(self.surf, (0, 0))
             pg.event.pump()
             pg.display.flip()

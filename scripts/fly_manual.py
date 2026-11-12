@@ -8,6 +8,7 @@ Controls:
     space        toggle full throttle / cutoff
     s            fire next stage (manual staging is the default here)
     1 / 2 / 3    time warp x1 / x5 / x20
+    + / - / 0    zoom in / out / reset (also the mouse wheel and the on-screen buttons)
     r            reset    esc quits
 
 Each sim step is 1 s, rendered at 30 fps, so x1 warp is ~30x real time.
@@ -50,6 +51,8 @@ def main():
     while True:
         stage_cmd = False
         for event in pygame.event.get():
+            if env.renderer is not None and env.renderer.handle_event(event):
+                continue
             if event.type == pygame.QUIT:
                 env.close()
                 return

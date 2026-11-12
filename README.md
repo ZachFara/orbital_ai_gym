@@ -167,7 +167,8 @@ boundary-riding vertical descent to a touchdown at the profile's ~8 m/s
 floor, with ~3.4 km/s to spare. It lands ~287 km from the site: putting
 the landing *on* the site is deliberately left to learning (below).
 
-Fly it yourself (arrows steer, space toggles throttle, `s` stages, 1/2/3 time warp):
+Fly it yourself (arrows steer, space toggles throttle, `s` stages, 1/2/3 time
+warp, `+`/`-`/`0` or the mouse wheel zoom):
 
 ```bash
 python scripts/fly_manual.py [--mission orbit|return|moon]
