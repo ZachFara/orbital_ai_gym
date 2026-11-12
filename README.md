@@ -35,6 +35,7 @@ presets, and the renderer:
 | `OrbitAndReturn-v0` | reach orbit, hold it half a revolution, then land back on the pad |
 | `ToMoon-v0` | reach orbit, hold, then transfer to a site on an orbiting moon |
 | `ToMars-v0` | three stages: escape the planet, cross a star system, land on a Mars-like planet |
+| `MoonLandingFromOrbit-v0` | practice: the moon mission's last leg, parking orbit to a soft touchdown on the site |
 
 **ToMoon** adds a moon on rails (circular orbit, closed-form position) whose
 gravity pulls on the rocket. After the same climb-and-hold as the return
@@ -137,8 +138,11 @@ done = False
 while not done:
     obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
     done = terminated or truncated
-print(info["termination"], info["periapsis"], info["apoapsis"])
+print(info["termination"], info["success"], info["periapsis"], info["apoapsis"])
 ```
+
+Every env reports `info["success"]`: the mission accomplished as it defines
+it (`orbit`, `landed_on_pad`, `landed_moon_site`, `landed_mars_site`).
 
 Watch the scripted autopilots fly the missions (proof the envs are solvable,
 and a baseline for what "good" looks like):
@@ -199,6 +203,28 @@ python scripts/fly_moon_policy.py models/my-run/best.zip --sites 48   # full mis
 python scripts/fly_moon_policy.py models/my-run/best.zip --site 90 --render
 python scripts/fly_moon_policy.py models/my-run/best.zip --site 90 --video landing.mp4
 ```
+
+### Practice ladder
+
+The hardest leg of a mission as its own registered task, from a cached
+expert state, so an RL course can start where the interesting part is.
+`MoonLandingFromOrbit-v0` is `MoonLandingEnv` frozen at the reference
+configuration (decision 0008); the knobs are the practice ones:
+
+```python
+env = gym.make("MoonLandingFromOrbit-v0")                 # the training distribution
+env = gym.make("MoonLandingFromOrbit-v0", level=0.2)      # start in the last kilometres
+env = gym.make("MoonLandingFromOrbit-v0", extra_obs=False) # no guidance channels: harder
+env = gym.make("MoonLandingFromOrbit-v0", nominal=True)   # evaluation: parking-orbit entry
+obs, info = env.reset(options={"site_angle": 1.57})         # or pick the site
+```
+
+`level` runs from 0 (the last metres before touchdown) to 1 (anywhere
+from parking-orbit entry); the reference policy trains with a curriculum
+over it. The first `gym.make` flies the scripted pilot to build the state
+bank (about ten seconds, cached under `cache/`). `info["success"]` is a
+soft touchdown inside the site radius; `info["miss_km"]`,
+`info["moon_rel_speed"]` and `info["dv_spent"]` are the usual diagnostics.
 
 The reference result (run `ppo-zem-v15-polish`, see `EXPERIMENTS.md`),
 flown from the launch pad on a 48-site grid:

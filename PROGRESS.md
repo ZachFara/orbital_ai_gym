@@ -3,7 +3,7 @@
 ## Status (2026-11-12)
 
 Phase 1 merged (PR #1); repository public with branch protection. Phase 2
-in progress: A1-A7 done. Four missions exist and are solved by scripted pilots;
+in progress: A1-A7 and B1 done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -64,11 +64,14 @@ tests for new behaviour, PR merged, this file updated.
 
 ### B. The practice ladder
 
-- [ ] **B1 Register `MoonLandingFromOrbit-v0`.** `MoonLandingEnv` as a
-  Gymnasium id with a difficulty knob (`level`, `site_noise`,
-  `extra_obs`), the state bank built on first use, and `info["success"]`
-  on every env. Done: `gym.make` works from a fresh checkout; README
-  documents it; smoke test covers it. Depends on A1.
+- [x] **B1 Register `MoonLandingFromOrbit-v0`.** `MoonLandingFromOrbit`
+  (`orbital_gym/rl/moon_landing.py`) pins the reference reward, gamma,
+  throttle map and guidance channels (decision 0008) and keeps `level`,
+  `site_noise`, `extra_obs`, `nominal`; the bank builds on first use
+  (~10 s). Every env reports `info["success"]` (`SUCCESS` per mission
+  class). Done: `gym.make` works from a fresh checkout (CI builds the
+  bank); README documents it; `tests/test_smoke.py` covers the id, its
+  knobs and the flag. Depends on A1.
 - [ ] **B2 Register `MarsLandingFromOrbit-v0`.** Same wrapper over
   `ToMarsEnv` with a Mars bank from `MarsAutopilot`. Done: as B1. Depends
   on A3, B1.
@@ -144,4 +147,4 @@ hold; background training runs allowed; tasks strictly in listed order.
 
 ## Next steps
 
-1. B1 (`MoonLandingFromOrbit-v0`), then B2 onward in order.
+1. B2 (`MarsLandingFromOrbit-v0`), then B3 onward in order.

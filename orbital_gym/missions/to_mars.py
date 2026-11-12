@@ -48,6 +48,7 @@ from .to_orbit import TWO_PI, TwoStageToOrbitEnv, _elements, _wrap_pi
 
 
 class ToMarsEnv(TwoStageToOrbitEnv):
+    SUCCESS = ("landed_mars_site",)
     OBS_SIZE = 43
 
     def __init__(

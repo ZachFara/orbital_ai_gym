@@ -12,6 +12,7 @@ a behavior-cloning warm start plus a fixed-bank BC anchor. A bare
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import math
 import os
@@ -29,7 +30,16 @@ from stable_baselines3.common.utils import explained_variance
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor, VecNormalize
 from torch.nn import functional as F
 
-from .moon_landing import BANK_PATH, MoonLandingEnv, RewardConfig, StateBank, load_bank, restore
+from .moon_landing import (
+    BANK_PATH,
+    REFERENCE_GAMMA,
+    REFERENCE_REWARD,
+    MoonLandingEnv,
+    RewardConfig,
+    StateBank,
+    load_bank,
+    restore,
+)
 
 Metrics = dict[str, float]
 
@@ -46,7 +56,7 @@ class TrainConfig:
     batch_size: int = 2048
     epochs: int = 10
     lr: float = 3e-4
-    gamma: float = 0.9995
+    gamma: float = REFERENCE_GAMMA
     gae_lambda: float = 0.98
     clip: float = 0.2
     ent_coef: float = 0.0
@@ -80,11 +90,7 @@ class TrainConfig:
     eval_episodes: int = 16
     seed: int = 0
     resume: str = ""  # checkpoint to continue from (its _vecnorm.pkl is picked up)
-    reward: RewardConfig = field(
-        default_factory=lambda: RewardConfig(
-            w_miss=2.0, fuel=0.0005, hover_cost=0.02, hover_alt=500.0
-        )
-    )
+    reward: RewardConfig = field(default_factory=lambda: copy.copy(REFERENCE_REWARD))
 
     def flat(self) -> dict[str, Any]:
         d = dataclasses.asdict(self)

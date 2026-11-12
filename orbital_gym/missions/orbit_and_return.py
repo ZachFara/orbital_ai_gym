@@ -54,6 +54,7 @@ from .to_orbit import TWO_PI, TwoStageToOrbitEnv, _wrap_pi
 
 
 class OrbitAndReturnEnv(TwoStageToOrbitEnv):
+    SUCCESS = ("landed_on_pad",)
     OBS_SIZE = 12
 
     def __init__(

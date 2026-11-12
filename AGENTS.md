@@ -61,7 +61,8 @@ Tool versions and the dev extra are in `pyproject.toml`.
   default only with a run in `EXPERIMENTS.md` that beats it. The CLI flags
   of `scripts/train_moon_rl.py` are generated from its fields.
 - Registered env ids are immutable benchmarks (decision 0006). New rules
-  mean a new `-vN` id.
+  mean a new `-vN` id. Practice ids pin the reference recipe (decision
+  0008); every env reports `info["success"]`.
 - `ToMarsEnv` exposes its target through the moon hook names
   (`moon`, `_moon_world`, …) so the renderer works; `DESIGN.md` schedules a
   `CelestialBody` abstraction to replace this.
