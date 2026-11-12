@@ -3,7 +3,7 @@
 ## Status (2026-11-12)
 
 Phase 1 merged (PR #1); repository public with branch protection. Phase 2
-in progress: A1 done. Four missions exist and are solved by scripted pilots;
+in progress: A1, A2 done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -22,7 +22,7 @@ tests for new behaviour, PR merged, this file updated.
   CLI is unchanged. Done: `rl/moon_landing.py` imports from the package;
   the `ignore_imports` entry in `pyproject.toml` is deleted; import-linter
   passes without it. Depends on: nothing.
-- [ ] **A2 Explicit `Autopilot` hierarchy.** A base class owning
+- [x] **A2 Explicit `Autopilot` hierarchy.** A base class owning
   `_act_world`/`_act_elev`, the gravity-turn ascent, hold and the
   suicide-burn `_brake`/`_descend` parameterised by a body; mission pilots
   override only their transfer logic. Done: `MoonAutopilot` and
@@ -138,4 +138,4 @@ hold; background training runs allowed; tasks strictly in listed order.
 
 ## Next steps
 
-1. A2 (explicit `Autopilot` hierarchy), then A3 onward in order.
+1. A3 (`CelestialBody` abstraction), then A4 onward in order.

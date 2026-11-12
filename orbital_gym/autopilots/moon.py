@@ -10,10 +10,10 @@ import numpy as np
 
 from ..missions.to_moon import ToMoonEnv
 from ..missions.to_orbit import TWO_PI, _wrap_pi
-from .base import throttle_action
+from .base import LocalState, Pilot
 
 
-class MoonAutopilot:
+class MoonAutopilot(Pilot):
     """ascend -> coast -> inject -> hold -> tli -> transfer -> brake -> descend.
 
     Everything is flown westward: the moon orbits counterclockwise, and only
@@ -78,7 +78,7 @@ class MoonAutopilot:
     DEORBIT_PERI = -40_000.0  # burn retrograde until periapsis drops to here, m
 
     def __init__(self, env: ToMoonEnv, divert: bool = False, orbit: bool = False):
-        self.env = env
+        super().__init__(env)
         # Orbit-first is opt-in: off, the pilot flies the frozen direct-descent
         # baseline. On, it captures into a low circular moon orbit before the
         # descent -- the setup the from-orbit RL landing trains against.
@@ -90,7 +90,6 @@ class MoonAutopilot:
         # natural landing; far sites (e.g. the preset 0 deg) are out of reach
         # and it lands soft where it can.
         self.enable_divert = divert
-        self.mode = "ascend"
         p = env.planet
         self.peri_target = self.PERI_FRAC * p.space_altitude
         self.h_ref = self.LEVEL_FRAC * p.space_altitude
@@ -118,65 +117,48 @@ class MoonAutopilot:
         a = TWO_PI * ((self.env._time + tau) / moon.orbit_period) + moon.site_angle
         return np.array([math.cos(a), math.sin(a)])
 
-    def _accel_avail(self, info: dict) -> float:
-        return self.env.rocket.stages[self.env._stage].thrust / info["mass"]
-
-    def _act_world(self, theta: float, throttle: float, gate: float | None = None):
-        e = self.env
-        err = _wrap_pi(theta - e._theta)
-        if gate is not None and abs(err) > gate:
-            throttle = 0.0  # don't thrust mid-slew
-        if e.attitude_control:
-            # project the desired world direction onto the local frame
-            ux, uy, tx, ty = e._local_frame()
-            wx, wy = math.cos(theta), math.sin(theta)
-            return np.array(
-                [throttle_action(self.env, throttle), wx * ux + wy * uy, wx * tx + wy * ty],
-                dtype=np.float32,
-            )
-        turn = np.clip(err / (e.rocket.max_turn_rate * e.step_duration), -1.0, 1.0)
-        return np.array([throttle_action(self.env, throttle), turn], dtype=np.float32)
-
-    def _act_elev(self, elev: float, throttle: float, u, tw, gate=None):
-        d = math.cos(elev) * tw + math.sin(elev) * u
-        return self._act_world(math.atan2(d[1], d[0]), throttle, gate)
-
     def __call__(self, info: dict) -> np.ndarray:
-        env, p, moon = self.env, self.env.planet, self.env.moon
-        r, v, moon_ang, w_m, mpos, mvel = self._state()
-        rn = float(np.linalg.norm(r))
-        u = r / rn
-        tw = np.array([-u[1], u[0]])  # "west" tangent: the moon's direction
-        vr = float(v @ u)
-        vtw = float(v @ tw)
-        alt, cutoff = rn - p.radius, p.space_altitude
-        apo, peri = info["apoapsis"], info["periapsis"]
-        prograde = math.atan2(vr, max(1.0, vtw))
+        s = self._local(info)
+        if self.mode in ("ascend", "coast", "inject"):
+            act = self._ascent(s, info)
+            if act is not None:
+                return act
+        if self.mode == "hold":
+            act = self._hold(s, info)
+            if act is not None:
+                return act
+        return self._transfer(s, info)
 
-        # -- ascent: gravity-turn schedule, coast up, level injection burn
+    # -- shared phases: the westward gravity-turn ascent and the parking-orbit hold
+
+    def _ascent(self, s: LocalState, info: dict) -> np.ndarray | None:
+        """Gravity-turn schedule, coast to apoapsis, level injection burn.
+        Returns None once the parking orbit is reached (mode 'hold')."""
+        p = self.env.planet
+        u, tw = s.u, s.tw
         if self.mode == "ascend":
-            if math.isfinite(apo) and apo >= self.h_ref:
+            if math.isfinite(s.apo) and s.apo >= self.h_ref:
                 self.mode = "coast"
-            elif alt < 250.0:
+            elif s.alt < 250.0:
                 return self._act_elev(math.pi / 2.0, 1.0, u, tw)
             else:
-                f = min(1.0, (alt - 250.0) / (self.turn_end - 250.0))
+                f = min(1.0, (s.alt - 250.0) / (self.turn_end - 250.0))
                 elev = math.radians(88.0) * (1.0 - f) ** self.TURN_EXP
-                if vr < 40.0 and alt > 0.15 * cutoff:
+                if s.vr < 40.0 and s.alt > 0.15 * s.cutoff:
                     elev = max(elev, math.radians(30.0))
                 return self._act_elev(elev, 1.0, u, tw)
         if self.mode == "coast":
-            if apo < 1.005 * cutoff:  # drag ate the apoapsis: climb again
+            if s.apo < 1.005 * s.cutoff:  # drag ate the apoapsis: climb again
                 self.mode = "ascend"
-                return self._act_elev(max(prograde, 0.0), 1.0, u, tw)
-            if alt > apo - 2_000.0 or vr < 20.0:
+                return self._act_elev(max(s.prograde, 0.0), 1.0, u, tw)
+            if s.alt > s.apo - 2_000.0 or s.vr < 20.0:
                 self.mode = "inject"
             else:
-                return self._act_elev(prograde, 0.0, u, tw)
+                return self._act_elev(s.prograde, 0.0, u, tw)
         if self.mode == "inject":
             rp = p.radius + self.peri_target
-            v_need = math.sqrt(2.0 * p.mu * rp / (rn * (rn + rp)))
-            if peri >= self.peri_target - 150.0:
+            v_need = math.sqrt(2.0 * p.mu * rp / (s.rn * (s.rn + rp)))
+            if s.peri >= self.peri_target - 150.0:
                 self.mode = "hold"
             else:
                 # command an acceleration vector: vertical holds altitude
@@ -184,68 +166,87 @@ class MoonAutopilot:
                 # the cutoff. Attitude and throttle both come from the
                 # vector, so the vertical hold survives the throttle-down.
                 a_av = self._accel_avail(info)
-                g_eff = p.mu / (rn * rn) - vtw * vtw / rn
-                vr_des = min(40.0, max(-15.0, 0.02 * (self.h_ref - alt)))
-                a_v = g_eff + 0.4 * (vr_des - vr)
-                a_h = min(a_av, max(0.0, 0.8 * (v_need - vtw)))
+                g_eff = p.mu / (s.rn * s.rn) - s.vtw * s.vtw / s.rn
+                vr_des = min(40.0, max(-15.0, 0.02 * (self.h_ref - s.alt)))
+                a_v = g_eff + 0.4 * (vr_des - s.vr)
+                a_h = min(a_av, max(0.0, 0.8 * (v_need - s.vtw)))
                 return self._act_elev(
                     math.atan2(a_v, a_h), min(1.0, math.hypot(a_v, a_h) / a_av), u, tw
                 )
+        return None
 
-        # -- hold: coast until the orbit-hold is complete AND a transfer
-        # solution exists. Each step, solve (Kepler) for the apoapsis a
-        # TLI-right-now would need to meet the moon at the orbit crossing;
-        # fire when it enters the band. No instantaneous window to miss.
-        if self.mode == "hold":
-            if info["orbit_progress"] >= 1.0:
-                r2 = moon.orbit_radius
-                theta_r = math.atan2(r[1], r[0])
+    def _hold(self, s: LocalState, info: dict) -> np.ndarray | None:
+        """Coast in the parking orbit until the hold is complete and the
+        mission's departure is ready (`_departure_ready` switches the mode);
+        station-keep meanwhile. Returns None once departure begins."""
+        if info["orbit_progress"] >= 1.0:
+            self._departure_ready(s, info)
+        if self.mode != "hold":
+            return None
+        # station-keeping: the moon's pull can sag the periapsis into the
+        # atmosphere over a long phase wait
+        if s.peri < 1.015 * s.cutoff:
+            self._trim = True
+        if self._trim and s.peri >= 1.025 * s.cutoff:
+            self._trim = False
+        return self._act_elev(s.prograde, 0.3 if self._trim else 0.0, s.u, s.tw, gate=0.2)
 
-                def phase_gap(ra: float) -> float:
-                    a_sma = 0.5 * (rn + ra)
-                    e = (ra - rn) / (ra + rn)
-                    r_t = min(r2, ra * 0.999999)
-                    cosnu = (a_sma * (1.0 - e * e) / r_t - 1.0) / max(e, 1e-9)
-                    nu = math.acos(max(-1.0, min(1.0, cosnu)))
-                    ecc_an = 2.0 * math.atan2(
-                        math.sqrt(1.0 - e) * math.sin(nu / 2.0),
-                        math.sqrt(1.0 + e) * math.cos(nu / 2.0),
-                    )
-                    t_x = (ecc_an - e * math.sin(ecc_an)) / math.sqrt(p.mu / a_sma**3)
-                    return _wrap_pi(moon_ang + w_m * t_x - theta_r - nu)
+    # -- mission-specific: when to leave, and everything after
 
-                lo_f, hi_f = self.TLI_BAND
-                best_ra, best_gap = 0.0, 0.02
-                for k in range(40):
-                    ra = (lo_f + k * (hi_f - lo_f) / 39.0) * r2
-                    g = abs(phase_gap(ra))
-                    if g < best_gap:
-                        best_ra, best_gap = ra, g
-                if best_ra > 0.0:
-                    self._ra_target = best_ra
-                    self.mode = "tli"
-            if self.mode != "tli":
-                # station-keeping: the moon's pull can sag the periapsis
-                # into the atmosphere over a long phase wait
-                if peri < 1.015 * cutoff:
-                    self._trim = True
-                if self._trim and peri >= 1.025 * cutoff:
-                    self._trim = False
-                return self._act_elev(prograde, 0.3 if self._trim else 0.0, u, tw, gate=0.2)
+    def _departure_ready(self, s: LocalState, info: dict) -> None:
+        """Each step, solve (Kepler) for the apoapsis a TLI-right-now would
+        need to meet the moon at the orbit crossing; fire when it enters the
+        band. No instantaneous window to miss."""
+        p, moon = self.env.planet, self.env.moon
+        _, _, moon_ang, w_m, _, _ = self._state()
+        r2 = moon.orbit_radius
+        rn = s.rn
+        theta_r = math.atan2(s.r[1], s.r[0])
 
+        def phase_gap(ra: float) -> float:
+            a_sma = 0.5 * (rn + ra)
+            e = (ra - rn) / (ra + rn)
+            r_t = min(r2, ra * 0.999999)
+            cosnu = (a_sma * (1.0 - e * e) / r_t - 1.0) / max(e, 1e-9)
+            nu = math.acos(max(-1.0, min(1.0, cosnu)))
+            ecc_an = 2.0 * math.atan2(
+                math.sqrt(1.0 - e) * math.sin(nu / 2.0),
+                math.sqrt(1.0 + e) * math.cos(nu / 2.0),
+            )
+            t_x = (ecc_an - e * math.sin(ecc_an)) / math.sqrt(p.mu / a_sma**3)
+            return _wrap_pi(moon_ang + w_m * t_x - theta_r - nu)
+
+        lo_f, hi_f = self.TLI_BAND
+        best_ra, best_gap = 0.0, 0.02
+        for k in range(40):
+            ra = (lo_f + k * (hi_f - lo_f) / 39.0) * r2
+            g = abs(phase_gap(ra))
+            if g < best_gap:
+                best_ra, best_gap = ra, g
+        if best_ra > 0.0:
+            self._ra_target = best_ra
+            self.mode = "tli"
+
+    def _transfer(self, s: LocalState, info: dict) -> np.ndarray:
+        """TLI burn, coast to the moon, then retro brake and descent (or the
+        orbit-first capture, deorbit and powered descent)."""
+        env, p, moon = self.env, self.env.planet, self.env.moon
+        _, _, _, _, mpos, mvel = self._state()
         if self.mode == "tli":
             # burn prograde up to the transfer-ellipse speed, throttle
             # tapered (apoapsis is far too cutoff-sensitive for 1 s steps)
-            v_go = math.sqrt(p.mu * (2.0 / rn - 2.0 / (rn + self._ra_target))) - math.hypot(
+            v_go = math.sqrt(p.mu * (2.0 / s.rn - 2.0 / (s.rn + self._ra_target))) - math.hypot(
                 float(env._vx), float(env._vy)
             )
             if v_go <= 0.0:
                 self.mode = "transfer"
             else:
-                return self._act_elev(prograde, min(1.0, max(0.05, v_go / 25.0)), u, tw, gate=0.3)
+                return self._act_elev(
+                    s.prograde, min(1.0, max(0.05, v_go / 25.0)), s.u, s.tw, gate=0.3
+                )
 
-        prel = r - mpos
-        vrel = v - mvel
+        prel = s.r - mpos
+        vrel = s.v - mvel
         d = float(np.linalg.norm(prel))
 
         if self.mode == "transfer":
@@ -253,7 +254,7 @@ class MoonAutopilot:
                 self.mode = "capture" if self.orbit else "brake"
             else:
                 div = self._divert(prel, vrel, d)
-                return div if div is not None else self._act_elev(prograde, 0.0, u, tw)
+                return div if div is not None else self._act_elev(s.prograde, 0.0, s.u, s.tw)
 
         if self.mode in ("capture", "moon_orbit", "deorbit", "pdescend"):
             return self._orbit_control(prel, vrel, d)
@@ -293,7 +294,7 @@ class MoonAutopilot:
         malt = d - moon.radius
         g_m = moon.mu / (d * d)
         v_circ = math.sqrt(moon.mu / d)
-        a_av = self._accel_avail_moon()
+        a_av = self._accel_now()
         peri, _apo, _energy, ecc = e._moon_orbit_elements()
 
         if self.mode == "capture":
@@ -347,7 +348,7 @@ class MoonAutopilot:
         malt = d - m.radius
         v = float(np.linalg.norm(vrel))
         vhat = vrel / max(1.0, v)
-        a_av = self._accel_avail_moon()
+        a_av = self._accel_now()
         g_m = m.mu / (d * d)
         v_r = float(vrel @ um)  # radial velocity (negative descending)
         v_t = float(vrel @ tm)
@@ -415,16 +416,13 @@ class MoonAutopilot:
         zem_lat = zem - float(zem @ vhat) * vhat
         if float(np.linalg.norm(zem_lat)) < self.DIVERT_DEADBAND:
             return None
-        a_av = self._accel_avail_moon()
+        a_av = self._accel_now()
         a_lat = self.DIVERT_N * zem_lat / (t_go * t_go)
         mag = float(np.linalg.norm(a_lat))
         if mag > self.DIVERT_CAP * a_av:
             a_lat *= self.DIVERT_CAP * a_av / mag
             mag = self.DIVERT_CAP * a_av
         return self._act_world(math.atan2(a_lat[1], a_lat[0]), min(1.0, mag / a_av), gate=0.6)
-
-    def _accel_avail_moon(self) -> float:
-        return self.env.rocket.stages[self.env._stage].thrust / self.env._mass
 
     def _brake(self, info: dict, prel, vrel, d: float) -> np.ndarray:
         """Moon-relative retro suicide burn, as late as possible.
