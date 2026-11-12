@@ -65,6 +65,10 @@ Tool versions and the dev extra are in `pyproject.toml`.
 - Patched conics do not work in the compact Mars system: the star's tide
   does ~1 km/s of work during the climb-out. The Mars pilot plans departure
   by simulating the full force model ahead.
+- The scripted pilots are mode machines on the `Pilot` base
+  (`orbital_gym/autopilots/base.py`); `tests/test_pilot_fingerprints.py`
+  pins every flight exactly, so a pilot change must update those numbers on
+  purpose in the same PR.
 - Physics code uses mathematical names (`R`, `E`, `H`); ruff's naming rules
   for those are off on purpose.
 - The experiment store (`mlflow.db`, `mlruns/`), checkpoints (`models/`) and

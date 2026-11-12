@@ -11,6 +11,7 @@ import numpy as np
 
 from ..missions.to_mars import ToMarsEnv
 from ..missions.to_orbit import TWO_PI, _wrap_pi
+from .base import LocalState
 from .lambert import lambert
 from .moon import MoonAutopilot
 
@@ -289,68 +290,25 @@ class MarsAutopilot(MoonAutopilot):
 
     # -- the mode machine -------------------------------------------------------
 
-    def __call__(self, info: dict) -> np.ndarray:
-        env, p = self.env, self.env.planet
-        r, v, _, _, mpos, mvel = self._state()
-        rn = float(np.linalg.norm(r))
-        u = r / rn
-        tw = np.array([-u[1], u[0]])  # CCW tangent: the parking orbit's sense
-        vr = float(v @ u)
-        vtw = float(v @ tw)
-        alt, cutoff = rn - p.radius, p.space_altitude
-        apo, peri = info["apoapsis"], info["periapsis"]
-        prograde = math.atan2(vr, max(1.0, vtw))
+    def _departure_ready(self, s: LocalState, info: dict) -> None:
+        """Simulate-ahead planning every 20 s; depart when burn plus the
+        predicted correction is cheap enough."""
+        env = self.env
+        if env._steps % 20 != 0:
+            return
+        plan = self._plan_departure(s.r, s.v)
+        if plan is not None and plan[1] < self.DEPART_MAX:
+            self.depart_dv = plan[0]
+            self.depart_dv0 = env._dv_used
+            self.t_arrival = plan[2]
+            self.plan_log.append((env._time, plan[2], plan[1]))
+            self.mode = "depart"
 
-        if self.mode == "ascend":
-            if math.isfinite(apo) and apo >= self.h_ref:
-                self.mode = "coast"
-            elif alt < 250.0:
-                return self._act_elev(math.pi / 2.0, 1.0, u, tw)
-            else:
-                f = min(1.0, (alt - 250.0) / (self.turn_end - 250.0))
-                elev = math.radians(88.0) * (1.0 - f) ** self.TURN_EXP
-                if vr < 40.0 and alt > 0.15 * cutoff:
-                    elev = max(elev, math.radians(30.0))
-                return self._act_elev(elev, 1.0, u, tw)
-        if self.mode == "coast":
-            if apo < 1.005 * cutoff:
-                self.mode = "ascend"
-                return self._act_elev(max(prograde, 0.0), 1.0, u, tw)
-            if alt > apo - 2_000.0 or vr < 20.0:
-                self.mode = "inject"
-            else:
-                return self._act_elev(prograde, 0.0, u, tw)
-        if self.mode == "inject":
-            rp = p.radius + self.peri_target
-            v_need = math.sqrt(2.0 * p.mu * rp / (rn * (rn + rp)))
-            if peri >= self.peri_target - 150.0:
-                self.mode = "hold"
-            else:
-                a_av = self._accel_avail(info)
-                g_eff = p.mu / (rn * rn) - vtw * vtw / rn
-                vr_des = min(40.0, max(-15.0, 0.02 * (self.h_ref - alt)))
-                a_v = g_eff + 0.4 * (vr_des - vr)
-                a_h = min(a_av, max(0.0, 0.8 * (v_need - vtw)))
-                return self._act_elev(
-                    math.atan2(a_v, a_h), min(1.0, math.hypot(a_v, a_h) / a_av), u, tw
-                )
-
-        if self.mode == "hold":
-            if info["orbit_progress"] >= 1.0 and env._steps % 20 == 0:
-                plan = self._plan_departure(r, v)
-                if plan is not None and plan[1] < self.DEPART_MAX:
-                    self.depart_dv = plan[0]
-                    self.depart_dv0 = env._dv_used
-                    self.t_arrival = plan[2]
-                    self.plan_log.append((env._time, plan[2], plan[1]))
-                    self.mode = "depart"
-            if self.mode != "depart":
-                if peri < 1.015 * cutoff:
-                    self._trim = True
-                if self._trim and peri >= 1.025 * cutoff:
-                    self._trim = False
-                return self._act_elev(prograde, 0.3 if self._trim else 0.0, u, tw, gate=0.2)
-
+    def _transfer(self, s: LocalState, info: dict) -> np.ndarray:
+        """Departure burn, Lambert-corrected cruise, orbit-first capture at the
+        target, then the moon pilot's deorbit and powered descent."""
+        env = self.env
+        _, _, _, _, mpos, mvel = self._state()
         if self.mode == "depart":
             # cut off on delta-v delivered, not on speed: over a 100 s burn
             # gravity takes speed back and a speed target overshoots badly
@@ -359,61 +317,18 @@ class MarsAutopilot(MoonAutopilot):
                 self.mode = "cruise"
             else:
                 return self._act_world(
-                    math.atan2(v[1], v[0]), min(1.0, max(0.05, v_go / 25.0)), gate=0.3
+                    math.atan2(s.v[1], s.v[0]), min(1.0, max(0.05, v_go / 25.0)), gate=0.3
                 )
 
-        prel = r - mpos
-        vrel = v - mvel
+        prel = s.r - mpos
+        vrel = s.v - mvel
         d = float(np.linalg.norm(prel))
 
         if self.mode == "cruise":
             if d < 3.0 * env.mars_soi:
                 self.mode = "capture"
             else:
-                clear = rn > 2.5 * env.planet_soi
-                if clear and env._time - self._last_plan > self.REPLAN_EVERY:
-                    # Re-plan, but only switch arrival time when it pays: the
-                    # free-time scan hops between minima and each hop costs a
-                    # new residual (measured: 1.8 km/s of corrections wasted).
-                    self._last_plan = env._time
-                    plan = self._plan_arrival()
-                    cur = None
-                    if self.t_arrival > env._time + 300.0:
-                        x, y, vx, vy = env.rocket_helio()
-                        sol = lambert(
-                            env.star.mu,
-                            (x, y),
-                            self._aim_point(self.t_arrival),
-                            self.t_arrival - env._time,
-                        )
-                        if sol is not None:
-                            cur = math.hypot(sol[0][0] - vx, sol[0][1] - vy)
-                    if plan is not None and (
-                        cur is None
-                        or cur > self.REPLAN_RESIDUAL
-                        or plan[1] < cur - self.REPLAN_GAIN
-                    ):
-                        self.t_arrival = plan[0]
-                        self._update_aim_offset(plan[0])
-                        self.plan_log.append((env._time, plan[0], plan[1]))
-                t_go = self.t_arrival - env._time
-                if self._cruise_dv0 is None:
-                    self._cruise_dv0 = env._dv_used
-                self._mcc_spent = env._dv_used - self._cruise_dv0  # actual, not commanded
-                if clear and t_go > 300.0 and self._mcc_spent < self.MCC_BUDGET:
-                    x, y, vx, vy = env.rocket_helio()
-                    sol = lambert(env.star.mu, (x, y), self._aim_point(self.t_arrival), t_go)
-                    if sol is not None:
-                        dvx, dvy = sol[0][0] - vx, sol[0][1] - vy
-                        mag = math.hypot(dvx, dvy)
-                        if mag > self.MCC_MIN:
-                            a_av = self._accel_avail_moon()
-                            return self._act_world(
-                                math.atan2(dvy, dvx),
-                                min(1.0, mag / (a_av * env.step_duration)),
-                                gate=0.3,
-                            )
-                return self._act_world(math.atan2(-vrel[1], -vrel[0]), 0.0)
+                return self._cruise(s, prel, vrel)
 
         if self.mode in ("capture", "moon_orbit", "deorbit", "pdescend"):
             if self.mode == "capture":
@@ -440,3 +355,50 @@ class MarsAutopilot(MoonAutopilot):
                 return self._brake(info, prel, vrel, d)
 
         return self._descend(info, prel, vrel, d)
+
+    def _cruise(self, s: LocalState, prel: np.ndarray, vrel: np.ndarray) -> np.ndarray:
+        """Coast on the heliocentric conic with Lambert midcourse corrections
+        toward the aim point at the planned arrival time."""
+        env = self.env
+        clear = s.rn > 2.5 * env.planet_soi
+        if clear and env._time - self._last_plan > self.REPLAN_EVERY:
+            # Re-plan, but only switch arrival time when it pays: the
+            # free-time scan hops between minima and each hop costs a
+            # new residual (measured: 1.8 km/s of corrections wasted).
+            self._last_plan = env._time
+            plan = self._plan_arrival()
+            cur = None
+            if self.t_arrival > env._time + 300.0:
+                x, y, vx, vy = env.rocket_helio()
+                sol = lambert(
+                    env.star.mu,
+                    (x, y),
+                    self._aim_point(self.t_arrival),
+                    self.t_arrival - env._time,
+                )
+                if sol is not None:
+                    cur = math.hypot(sol[0][0] - vx, sol[0][1] - vy)
+            if plan is not None and (
+                cur is None or cur > self.REPLAN_RESIDUAL or plan[1] < cur - self.REPLAN_GAIN
+            ):
+                self.t_arrival = plan[0]
+                self._update_aim_offset(plan[0])
+                self.plan_log.append((env._time, plan[0], plan[1]))
+        t_go = self.t_arrival - env._time
+        if self._cruise_dv0 is None:
+            self._cruise_dv0 = env._dv_used
+        self._mcc_spent = env._dv_used - self._cruise_dv0  # actual, not commanded
+        if clear and t_go > 300.0 and self._mcc_spent < self.MCC_BUDGET:
+            x, y, vx, vy = env.rocket_helio()
+            sol = lambert(env.star.mu, (x, y), self._aim_point(self.t_arrival), t_go)
+            if sol is not None:
+                dvx, dvy = sol[0][0] - vx, sol[0][1] - vy
+                mag = math.hypot(dvx, dvy)
+                if mag > self.MCC_MIN:
+                    a_av = self._accel_now()
+                    return self._act_world(
+                        math.atan2(dvy, dvx),
+                        min(1.0, mag / (a_av * env.step_duration)),
+                        gate=0.3,
+                    )
+        return self._act_world(math.atan2(-vrel[1], -vrel[0]), 0.0)

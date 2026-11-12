@@ -10,10 +10,10 @@ import numpy as np
 
 from ..missions.orbit_and_return import OrbitAndReturnEnv
 from ..missions.to_orbit import TwoStageToOrbitEnv, _wrap_pi
-from .base import throttle_action
+from .base import Pilot, throttle_action
 
 
-class Autopilot:
+class Autopilot(Pilot):
     """ascend -> coast -> insert -> done.
 
     Ascend flies an altitude-keyed pitch schedule until the apoapsis is above
@@ -26,8 +26,7 @@ class Autopilot:
     """
 
     def __init__(self, env: TwoStageToOrbitEnv):
-        self.env = env
-        self.mode = "ascend"
+        super().__init__(env)
 
     def __call__(self, info: dict) -> np.ndarray:
         p = self.env.planet
