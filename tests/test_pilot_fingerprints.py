@@ -52,5 +52,8 @@ def test_scripted_flight_is_unchanged(name: str) -> None:
         if terminated or truncated:
             break
     assert (n, info["termination"]) == (steps, termination)
+    assert info["success"] == (
+        termination in ("orbit", "landed_on_pad", "landed_moon_site", "landed_mars_site")
+    )
     assert info["dv_used"] == pytest.approx(dv_used, abs=1e-3)
     assert info["episode_return"] == pytest.approx(episode_return, abs=1e-3)

@@ -8,6 +8,12 @@ env = gym.make("OrbitAndReturn-v0")            # ...then come home to the pad
 env = gym.make("ToMoon-v0")                    # orbit, hold, land on the moon
 env = gym.make("ToMars-v0")                    # three stages, a star, a Mars
 env = gym.make("TwoStageToOrbit-v0", planet="earth", max_episode_steps=8000)
+
+The practice ladder: a mission's hardest leg on its own, from a cached
+expert state, with difficulty knobs and `info["success"]`:
+
+env = gym.make("MoonLandingFromOrbit-v0")             # parking orbit -> site
+env = gym.make("MoonLandingFromOrbit-v0", level=0.3)  # start closer to touchdown
 """
 
 from gymnasium.envs.registration import register
@@ -75,5 +81,12 @@ register(
 register(
     id="ToMars-v0",
     entry_point="orbital_gym.missions.to_mars:ToMarsEnv",
+    max_episode_steps=None,
+)
+# The practice ladder (decision 0008): one leg of a mission, from a cached
+# expert state. The wrapper enforces its own step window.
+register(
+    id="MoonLandingFromOrbit-v0",
+    entry_point="orbital_gym.rl.moon_landing:MoonLandingFromOrbit",
     max_episode_steps=None,
 )

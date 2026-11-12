@@ -89,6 +89,8 @@ from ..presets import G0, PLANETS, ROCKETS, Planet, Rocket, total_delta_v
 
 class TwoStageToOrbitEnv(gym.Env):
     metadata: ClassVar[dict[str, Any]] = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
+    # the terminations that count as the mission accomplished (info["success"])
+    SUCCESS: ClassVar[tuple[str, ...]] = ("orbit",)
     OBS_SIZE = 9  # subclasses that append observations override this
     HOVER_K = 3.0  # hover_control action gain: a[0]=+-1 is exp(+-3) ~ 20x/0.05x hover
 
@@ -524,6 +526,7 @@ class TwoStageToOrbitEnv(gym.Env):
                 and peri > self.planet.space_altitude
             ),
             "termination": self._terminal,
+            "success": self._terminal in self.SUCCESS,
         }
 
     # Test/debug hook: place the rocket anywhere with a given velocity.

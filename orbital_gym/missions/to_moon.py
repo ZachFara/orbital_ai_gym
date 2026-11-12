@@ -39,6 +39,7 @@ from .to_orbit import TWO_PI, TwoStageToOrbitEnv, _wrap_pi
 
 
 class ToMoonEnv(TwoStageToOrbitEnv):
+    SUCCESS = ("landed_moon_site",)
     OBS_SIZE = 30
 
     def __init__(

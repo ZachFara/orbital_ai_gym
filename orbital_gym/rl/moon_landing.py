@@ -207,6 +207,12 @@ class RewardConfig:
     # the site radius, and drifted off-site doing it)
 
 
+# the reward of the reference result (run ppo-zem-v15, EXPERIMENTS.md); the
+# registered practice id and the trainer's defaults both read it
+REFERENCE_REWARD = RewardConfig(w_miss=2.0, fuel=0.0005, hover_cost=0.02, hover_alt=500.0)
+REFERENCE_GAMMA = 0.9995
+
+
 class MoonLandingEnv(gym.Env):
     """Parking orbit -> soft touchdown on a random site. See module docstring."""
 
@@ -234,7 +240,7 @@ class MoonLandingEnv(gym.Env):
         super().__init__()
         self.bank = load_bank(bank) if isinstance(bank, str) else bank
         self.level = float(level)
-        self.rc = reward or RewardConfig()
+        self.rc = copy.copy(reward) if reward is not None else RewardConfig()
         self.gamma = gamma
         self.window = window
         self.window_slack = window_slack
@@ -507,6 +513,7 @@ class MoonLandingEnv(gym.Env):
         info["start_ttl"] = self.start_ttl
         info["level"] = self.level
         info["on_site"] = info["termination"] == "landed_moon_site"
+        info["success"] = bool(info["on_site"])
         info["soft"] = info["termination"] in ("landed_moon", "landed_moon_site")
         info["miss_km"] = info["moon_site_distance"] / 1000.0
         info["dv_spent"] = self.env._dv_used - self._dv0
@@ -517,3 +524,39 @@ class MoonLandingEnv(gym.Env):
 
     def close(self):
         self.env.close()
+
+
+class MoonLandingFromOrbit(MoonLandingEnv):
+    """`MoonLandingFromOrbit-v0`: the landing task frozen at the reference
+    configuration (decisions 0006 and 0008): hover-relative exponential
+    throttle, the zero-effort guidance channels, the reference reward and
+    its gamma. The knobs are the practice ones: `level` (0 = the last
+    metres before touchdown, 1 = anywhere from parking-orbit entry),
+    `site_noise` (how far the site is re-randomised from the expert's),
+    `extra_obs` (drop the guidance channels for a harder observation) and
+    `nominal` (every episode starts at parking-orbit entry, no noise: the
+    evaluation distribution). The expert state bank is built on first use
+    (about ten seconds) and cached under `cache/`."""
+
+    def __init__(
+        self,
+        level: float = 1.0,
+        site_noise: float = 1.0,
+        extra_obs: bool = True,
+        nominal: bool = False,
+        render_mode: str | None = None,
+        seed: int | None = None,
+        bank: StateBank | str = BANK_PATH,
+    ):
+        super().__init__(
+            bank,
+            level=level,
+            reward=REFERENCE_REWARD,
+            gamma=REFERENCE_GAMMA,
+            site_noise=site_noise,
+            nominal=nominal,
+            throttle_map="exp",
+            extra_obs=extra_obs,
+            render_mode=render_mode,
+            seed=seed,
+        )
