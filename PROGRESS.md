@@ -3,7 +3,7 @@
 ## Status (2026-11-12)
 
 Phase 1 merged (PR #1); repository public with branch protection. Phase 2
-in progress: A1-A7 and B1-B3 done. Four missions exist and are solved by scripted pilots;
+in progress: A and B done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -92,9 +92,14 @@ tests for new behaviour, PR merged, this file updated.
   `MarsLandingFromOrbit-v0` inherited the moon's 1,800-step window and
   timed out 11/16 (the window is now per task: 5,200). Done: table
   reproducible by one command; `tests/test_benchmark.py`. Depends on B1.
-- [ ] **B4 Camera zoom.** Keyboard, mouse wheel and on-screen buttons in
-  `rendering.py`; exposed in `fly_manual.py`. Done: zoom persists across
-  the rocket and map views; a render test exercises it. Depends on A3.
+- [x] **B4 Camera zoom.** `Renderer.zoom` multiplies the automatic framing
+  (`view_span`), so it persists across the rocket and map views;
+  `handle_event` takes `+`/`-`/`0`, the mouse wheel and clicks on three
+  on-screen buttons (drawn in human mode only, so recordings stay clean);
+  `draw()` reads the mouse events itself, `fly_manual.py` forwards every
+  event through the env's new `renderer` property. Done: a render test
+  drives all three inputs and checks the zoom survives the map-view
+  transition. Depends on A3.
 
 ### C. v1 landing rules
 
@@ -160,4 +165,4 @@ hold; background training runs allowed; tasks strictly in listed order.
 
 ## Next steps
 
-1. B4 (camera zoom), then C1 onward in order.
+1. C1 (landing legs and the 5 s hold as `-v1` envs), then C2 onward in order.
