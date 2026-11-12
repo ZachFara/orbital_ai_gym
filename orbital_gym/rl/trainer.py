@@ -82,6 +82,8 @@ class TrainConfig:
     min_episodes: int = 150
     probe_episodes: int = 24  # deterministic episodes gating a level advance (0 = noisy gate)
     probe_every: int = 5  # rollouts between probes
+    rule_slack0: float = 0.0  # m/s added to the v1 contact limits at the start (rule curriculum)
+    rule_slack_step: float = 1.0  # m/s taken back per advance, before the level moves
     throttle_map: str = "exp"
     extra_obs: bool = True  # the zero-effort guidance channels
     window: int = 0  # steps per episode from orbit entry; 0 = the task's own
@@ -384,6 +386,7 @@ class Curriculum(BaseCallback):
         super().__init__()
         self.cfg = cfg
         self.level = cfg.level0
+        self.rule_slack = cfg.rule_slack0
         self.probe_env = probe_env
         self.probe_rate = float("nan")
         self.win = window
@@ -396,6 +399,14 @@ class Curriculum(BaseCallback):
     def _on_training_start(self) -> None:
         self._t0 = time.time()
         self.training_env.env_method("set_level", self.level)
+        self._apply_rule_slack()
+
+    def _apply_rule_slack(self) -> None:
+        if self.cfg.rule_slack0 <= 0.0:
+            return
+        self.training_env.env_method("set_rule_slack", self.rule_slack)
+        if self.probe_env is not None:
+            self.probe_env.set_rule_slack(self.rule_slack)
 
     def _on_step(self) -> bool:
         for info in self.locals["infos"]:
@@ -430,7 +441,7 @@ class Curriculum(BaseCallback):
         if (
             self.at_level >= self.cfg.min_episodes
             and noisy >= 0.5 * self.cfg.threshold
-            and self.level < self.cfg.max_level
+            and (self.level < self.cfg.max_level or self.rule_slack > 0.0)
             and self._rollouts % self.cfg.probe_every == 0
         ):
             self.probe_rate = self._probe()
@@ -438,10 +449,20 @@ class Curriculum(BaseCallback):
         return -1.0  # no fresh probe: never advance on the noisy rate
 
     def _advance(self, rate: float) -> None:
+        """Tighten the touchdown limits first (rule curriculum), then raise
+        the start-state level."""
         self.probe_rate = float("nan")
+        self.at_level = 0
+        if self.rule_slack > 0.0:
+            self.rule_slack = max(0.0, self.rule_slack - self.cfg.rule_slack_step)
+            self._apply_rule_slack()
+            print(
+                f"  [{self.num_timesteps:>11,}] on-site {rate:.0%} -> "
+                f"rule slack {self.rule_slack:.1f} m/s (level {self.level:.2f})"
+            )
+            return
         self.level = min(self.cfg.max_level, self.level + self.cfg.level_step)
         self.training_env.env_method("set_level", self.level)
-        self.at_level = 0
         self.level_history.append((self.num_timesteps, self.level))
         print(f"  [{self.num_timesteps:>11,}] on-site {rate:.0%} -> level {self.level:.2f}")
 
@@ -450,6 +471,7 @@ class Curriculum(BaseCallback):
             f"train/{k}": float(np.mean([r[k] for r in self.recent])) for k in self.recent[0]
         }
         m["train/level"] = self.level
+        m["train/rule_slack"] = self.rule_slack
         m["train/episodes_at_level"] = float(self.at_level)
         if self.probe_rate == self.probe_rate:
             m["train/probe_on_site"] = self.probe_rate
@@ -468,7 +490,7 @@ class Curriculum(BaseCallback):
         if (
             self.at_level >= self.cfg.min_episodes
             and rate >= self.cfg.threshold
-            and self.level < self.cfg.max_level
+            and (self.level < self.cfg.max_level or self.rule_slack > 0.0)
         ):
             self._advance(rate)
         self._log()
