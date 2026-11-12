@@ -27,22 +27,26 @@ orbital_gym/autopilots/   scripted reference pilots (one class per mission)
 orbital_gym/rendering.py  the pygame view; reads env state, imports nothing
                           from missions (duck-typed on the env)
 orbital_gym/missions/     the environments: physics, reward, termination
+orbital_gym/bodies.py     CelestialBody / CircularRails: moons, planets, stars
+                          on rails (position, gravity, atmosphere, SOI,
+                          elements, impact predictor)
+orbital_gym/kinematics.py pure two-body functions
 orbital_gym/presets.py    plain dataclasses: planets, moons, stars, rockets
 ```
 
 Rules the import checker enforces:
 
-- `orbital_gym.presets` imports nothing else from the package.
-- `orbital_gym.missions` imports only `presets` (and `rendering` lazily,
-  inside `render()`, which is the Gymnasium convention).
-- `orbital_gym.rendering` imports only `presets`.
+- `orbital_gym.presets` and `orbital_gym.kinematics` import nothing else
+  from the package; `orbital_gym.bodies` imports only those two.
+- `orbital_gym.missions` imports `presets`, `kinematics`, `bodies` (and
+  `rendering` lazily, inside `render()`, which is the Gymnasium convention).
+- `orbital_gym.rendering` imports only `presets`; it reads the env's
+  `bodies` list through the `CelestialBody` interface.
 - `orbital_gym.autopilots` imports `missions` and `presets`.
 - `orbital_gym.rl` imports `missions`, `autopilots`, `presets`.
 - Nothing inside `orbital_gym` imports `scripts` or `tests`.
 
-The current tree has one known violation (the RL state bank imports the
-pilots from `scripts/autopilot_demo.py`); moving the pilots into
-`orbital_gym/autopilots/` is the first Phase 2 task.
+All of these are enforced by import-linter contracts in `pyproject.toml`.
 
 ## Core objects
 
@@ -77,18 +81,15 @@ pilots from `scripts/autopilot_demo.py`); moving the pilots into
 The code grew mission by mission and has duplication that the next
 missions would multiply. The intended shape:
 
-- **`CelestialBody`** (position, velocity, radius, mu, optional
-  atmosphere, sphere of influence) as the one abstraction for moons and
-  planets on rails. `ToMoonEnv` and `ToMarsEnv` would hold a list of
-  bodies; the renderer would draw bodies, not "the moon"; the impact
-  predictor and frame switch would live on the body or a `Frame` helper
-  instead of being copied between missions. This removes the
-  `_moon_*` alias hooks `ToMarsEnv` currently exposes for the renderer.
-- **`Autopilot` base class** owning the shared ascent, the act-in-world
-  helpers and the suicide-burn descent, with mission pilots overriding
-  only their transfer logic. `MarsAutopilot` already inherits from the
-  moon pilot; the hierarchy should be explicit and the per-body landing
-  logic parameterised by a `CelestialBody`.
+- **`CelestialBody`** (done, A3): position, velocity, gravity with the
+  tidal correction, atmosphere, sphere of influence, elements and impact
+  predictor for moons, planets and stars on `CircularRails`. Missions hold
+  a `bodies` list and a `target_body`; the renderer and the pilots read
+  bodies through that interface.
+- **`Pilot` base class** (done, A2): the per-step `LocalState`, the
+  act-in-world helpers, the shared ascent and hold; mission pilots override
+  `_departure_ready` and `_transfer`. The landing logic reads its target
+  through `self.body`.
 - **Guidance instruments** (`conic_impact`, the zero-effort miss and
   velocity, the stop-and-drop virtual miss) as one `Guidance` class
   constructed from a body and a state, used by both the observation and

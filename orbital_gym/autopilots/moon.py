@@ -9,7 +9,7 @@ import math
 import numpy as np
 
 from ..missions.to_moon import ToMoonEnv
-from ..missions.to_orbit import TWO_PI, _wrap_pi
+from ..missions.to_orbit import _wrap_pi
 from .base import LocalState, Pilot
 
 
@@ -102,20 +102,28 @@ class MoonAutopilot(Pilot):
     # -- state helpers (world frame; the moon is on rails, so its state is
     # a closed-form function of time)
 
+    @property
+    def body(self):
+        """The landing target: the env's `CelestialBody` on rails."""
+        return self.env.target_body
+
     def _state(self):
-        e, moon = self.env, self.env.moon
+        e, b = self.env, self.body
         r = np.array([e._rx, e._ry])
         v = np.array([e._vx, e._vy])
-        ang = TWO_PI * (e._time / moon.orbit_period)
-        w = TWO_PI / moon.orbit_period
-        mpos = moon.orbit_radius * np.array([math.cos(ang), math.sin(ang)])
-        mvel = w * moon.orbit_radius * np.array([-math.sin(ang), math.cos(ang)])
+        ang = b.angle(e._time)
+        w = b.rails.rate if b.rails is not None else 0.0
+        mpos = np.array(b.position(e._time))
+        mvel = np.array(b.velocity(e._time))
         return r, v, ang, w, mpos, mvel
 
     def _site_dir(self, tau: float) -> np.ndarray:
-        moon = self.env.moon
-        a = TWO_PI * ((self.env._time + tau) / moon.orbit_period) + moon.site_angle
+        a = self.body.angle(self.env._time + tau) + self.env._site_angle
         return np.array([math.cos(a), math.sin(a)])
+
+    def _body_elements(self):
+        e = self.env
+        return self.body.elements(e._rx, e._ry, e._vx, e._vy, e._time)
 
     def __call__(self, info: dict) -> np.ndarray:
         s = self._local(info)
@@ -197,9 +205,9 @@ class MoonAutopilot(Pilot):
         """Each step, solve (Kepler) for the apoapsis a TLI-right-now would
         need to meet the moon at the orbit crossing; fire when it enters the
         band. No instantaneous window to miss."""
-        p, moon = self.env.planet, self.env.moon
+        p, moon = self.env.planet, self.body
         _, _, moon_ang, w_m, _, _ = self._state()
-        r2 = moon.orbit_radius
+        r2 = moon.rails.radius
         rn = s.rn
         theta_r = math.atan2(s.r[1], s.r[0])
 
@@ -230,7 +238,7 @@ class MoonAutopilot(Pilot):
     def _transfer(self, s: LocalState, info: dict) -> np.ndarray:
         """TLI burn, coast to the moon, then retro brake and descent (or the
         orbit-first capture, deorbit and powered descent)."""
-        env, p, moon = self.env, self.env.planet, self.env.moon
+        env, p, moon = self.env, self.env.planet, self.body
         _, _, _, _, mpos, mvel = self._state()
         if self.mode == "tli":
             # burn prograde up to the transfer-ellipse speed, throttle
@@ -285,7 +293,7 @@ class MoonAutopilot(Pilot):
         parking orbit the RL landing takes over from.
         """
         e = self.env
-        moon = e.moon
+        moon = self.body
         um = prel / d
         tm = np.array([-um[1], um[0]])  # +90 deg: CCW tangential
         v_r = float(vrel @ um)
@@ -295,7 +303,7 @@ class MoonAutopilot(Pilot):
         g_m = moon.mu / (d * d)
         v_circ = math.sqrt(moon.mu / d)
         a_av = self._accel_now()
-        peri, _apo, _energy, ecc = e._moon_orbit_elements()
+        peri, _apo, _energy, ecc = self._body_elements()
 
         if self.mode == "capture":
             # coast in retrograde until low enough to start the capture burn
@@ -307,7 +315,7 @@ class MoonAutopilot(Pilot):
         if self.mode == "moon_orbit":
             # deorbit when the site sits the right lead-angle ahead in the orbit
             theta_v = math.atan2(prel[1], prel[0])
-            site_world = e._moon_angle() + e._site_angle
+            site_world = moon.angle(e._time) + e._site_angle
             ahead = sgn * _wrap_pi(site_world - theta_v)  # +: site ahead of us
             if 0.0 < ahead <= self.DEORBIT_LEAD:
                 self.mode = "deorbit"
@@ -342,7 +350,7 @@ class MoonAutopilot(Pilot):
         velocity and the descent together, and blend in radial support near the
         ground so the last hundred metres are gentle rather than a dive.
         """
-        m = self.env.moon
+        m = self.body
         um = prel / d
         tm = np.array([-um[1], um[0]])
         malt = d - m.radius
@@ -397,7 +405,7 @@ class MoonAutopilot(Pilot):
         the deadband, so it costs only the delta-v the aim actually needs.
         """
         e = self.env
-        if not self.enable_divert or self._burning or (d - e.moon.radius) < self.HANDOFF_ALT:
+        if not self.enable_divert or self._burning or (d - self.body.radius) < self.HANDOFF_ALT:
             return None
         dv_now = e.delta_v_remaining()
         if self._dv_at_divert is None:
@@ -410,8 +418,8 @@ class MoonAutopilot(Pilot):
         vv = max(1.0, float(vrel @ vrel))
         t_go = max(2.0, -pv / vv)
         vhat = vrel / math.sqrt(vv)
-        mpos = np.array(e._moon_world())
-        site_rel = np.array(e._moon_site_world()) - mpos
+        mpos = np.array(self.body.position(e._time))
+        site_rel = np.array(self.body.site_world(e._time, e._site_angle)) - mpos
         zem = site_rel - (prel + vrel * t_go)
         zem_lat = zem - float(zem @ vhat) * vhat
         if float(np.linalg.norm(zem_lat)) < self.DIVERT_DEADBAND:
@@ -431,7 +439,7 @@ class MoonAutopilot(Pilot):
         speed back in; a small lateral term steers for the site only when
         the predicted miss is already cheap to fix.
         """
-        moon = self.env.moon
+        moon = self.body
         v = float(np.linalg.norm(vrel))
         vhat = vrel / max(1.0, v)
         a_av = self._accel_avail(info)
@@ -472,7 +480,7 @@ class MoonAutopilot(Pilot):
     def _descend(self, info: dict, prel, vrel, d: float) -> np.ndarray:
         """Vertical descent riding the suicide-burn boundary (fall free,
         brake late), tracking the site laterally only when it is close."""
-        moon = self.env.moon
+        moon = self.body
         um = prel / d
         tm = np.array([-um[1], um[0]])
         malt = d - moon.radius

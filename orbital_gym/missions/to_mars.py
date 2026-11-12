@@ -31,10 +31,8 @@ published elements go target-relative; outside the planet's they go
 heliocentric; the escape guard fires only on a star-hyperbolic trajectory
 with an empty tank.
 
-The renderer's secondary-body hooks were written for the moon; this env
-exposes the target through the same names (`moon`, `_moon_world`, ...) so
-the existing map view, SOI re-centering and HUD work unchanged, and adds
-`_sun_world` / `_sun_velocity` / `planet_soi` for the system-wide view.
+The star and the target are `CelestialBody` objects (`self.bodies`); the
+renderer, the pilots and the RL layer read them through that interface.
 """
 
 from __future__ import annotations
@@ -44,6 +42,7 @@ from typing import Any
 
 import numpy as np
 
+from ..bodies import CelestialBody, CircularRails
 from ..presets import PLANETS, SYSTEMS, Planet, Rocket, StarSystem
 from .to_orbit import TWO_PI, TwoStageToOrbitEnv, _elements, _wrap_pi
 
@@ -83,19 +82,18 @@ class ToMarsEnv(TwoStageToOrbitEnv):
         self.system = SYSTEMS[system] if isinstance(system, str) else system
         self.star = self.system.star
         self.target = self.system.target
-        # renderer compatibility: the target plays the role of the moon
-        self.moon = self.target
         self.home_r = self.system.home_orbit_radius
-        self.home_w = TWO_PI / self.system.home_orbit_period
-        self.target_w = TWO_PI / self.target.orbit_period
         self.target_phase0 = (
             self.system.target_phase0 if target_phase0 is None else float(target_phase0)
         )
+        # the simulation frame is the launch planet's: its own rails about
+        # the star are what the star and the target are expressed against
+        self.home_rails = CircularRails(
+            self.home_r, self.system.home_orbit_period, self.system.home_phase0
+        )
         self.planet_soi = self.home_r * (planet_obj.mu / self.star.mu) ** 0.4
-        self.mars_soi = self.target.orbit_radius * (self.target.mu / self.star.mu) ** 0.4
-        self.moon_soi = self.mars_soi
-        self.sun_radius = self.star.radius
         self.v_home = math.sqrt(self.star.mu / self.home_r)
+        self._build_bodies()
 
         self.orbit_fraction = orbit_fraction
         self.hold_reward = hold_reward
@@ -104,8 +102,6 @@ class ToMarsEnv(TwoStageToOrbitEnv):
         self.mars_land_bonus = mars_land_bonus
         self.mars_site_radius = mars_site_radius
         self.mars_landing_speed = mars_landing_speed
-        self.moon_landing_speed = mars_landing_speed
-        self.moon_site_radius = mars_site_radius
         self._required_angle = max(1e-6, orbit_fraction * TWO_PI)
         self._d_scale = self.target.orbit_radius
 
@@ -136,6 +132,7 @@ class ToMarsEnv(TwoStageToOrbitEnv):
             self._site_angle = self.target.site_angle
         if options and "target_phase0" in options:
             self.target_phase0 = float(options["target_phase0"])
+            self._build_bodies()
         self._orbit_angle = 0.0
         self._transfer = False
         self._last_ang = math.pi / 2.0
@@ -147,60 +144,68 @@ class ToMarsEnv(TwoStageToOrbitEnv):
     def set_site_angle(self, site_angle: float) -> None:
         self._site_angle = float(site_angle)
 
+    def _build_bodies(self) -> None:
+        """The star (no rails of its own, seen from the planet's moving frame)
+        and the target, both tidal: their pull on the planet is subtracted."""
+        self.sun_body = CelestialBody(
+            "sun",
+            "star",
+            self.star.radius,
+            self.star.mu,
+            soi=math.inf,
+            frame=self.home_rails,
+            tidal=True,
+            soft_radius_fraction=1.0,
+        )
+        self.target_body = CelestialBody.from_preset(
+            "mars",
+            "planet",
+            self.target,
+            self.star.mu,
+            frame=self.home_rails,
+            phase0=self.target_phase0,
+            tidal=True,
+        )
+        self.bodies = [self.sun_body, self.target_body]
+        self.mars_soi = self.target_body.soi
+        self.target_w = self.target_body.rails.rate if self.target_body.rails else 0.0
+        # orbit circles the renderer draws around the star
+        self.system_orbit_radii = [self.home_r, self.target.orbit_radius]
+
     # --- rails (all positions in the launch planet's frame) ------------------
 
     def _home_angle(self, t: float | None = None) -> float:
-        t = self._time if t is None else t
-        return self.system.home_phase0 + self.home_w * t
+        return self.home_rails.angle(self._time if t is None else t)
 
     def _mars_angle(self, t: float | None = None) -> float:
-        t = self._time if t is None else t
-        return self.target_phase0 + self.target_w * t
+        return self.target_body.angle(self._time if t is None else t)
 
-    _moon_angle = _mars_angle  # renderer / shared-helper name
+    def _home_helio(self, t: float | None = None) -> tuple[float, float]:
+        return self.home_rails.position(self._time if t is None else t)
 
-    def _home_helio(self, t=None):
-        a = self._home_angle(t)
-        return self.home_r * math.cos(a), self.home_r * math.sin(a)
+    def _home_helio_velocity(self, t: float | None = None) -> tuple[float, float]:
+        return self.home_rails.velocity(self._time if t is None else t)
 
-    def _home_helio_velocity(self, t=None):
-        a = self._home_angle(t)
-        s = self.home_w * self.home_r
-        return -s * math.sin(a), s * math.cos(a)
+    def _mars_helio(self, t: float | None = None) -> tuple[float, float]:
+        assert self.target_body.rails is not None
+        return self.target_body.rails.position(self._time if t is None else t)
 
-    def _sun_world(self, t=None):
-        hx, hy = self._home_helio(t)
-        return -hx, -hy
+    def _sun_world(self, t: float | None = None) -> tuple[float, float]:
+        return self.sun_body.position(self._time if t is None else t)
 
-    def _sun_velocity(self, t=None):
-        vx, vy = self._home_helio_velocity(t)
-        return -vx, -vy
+    def _sun_velocity(self, t: float | None = None) -> tuple[float, float]:
+        return self.sun_body.velocity(self._time if t is None else t)
 
-    def _mars_helio(self, t=None):
-        a = self._mars_angle(t)
-        return (self.target.orbit_radius * math.cos(a), self.target.orbit_radius * math.sin(a))
+    def _mars_world(self, t: float | None = None) -> tuple[float, float]:
+        return self.target_body.position(self._time if t is None else t)
 
-    def _mars_world(self, t=None):
-        mx, my = self._mars_helio(t)
-        hx, hy = self._home_helio(t)
-        return mx - hx, my - hy
+    def _mars_velocity(self, t: float | None = None) -> tuple[float, float]:
+        return self.target_body.velocity(self._time if t is None else t)
 
-    def _mars_velocity(self, t=None):
-        a = self._mars_angle(t)
-        s = self.target_w * self.target.orbit_radius
-        hvx, hvy = self._home_helio_velocity(t)
-        return -s * math.sin(a) - hvx, s * math.cos(a) - hvy
+    def _mars_site_world(self, t: float | None = None) -> tuple[float, float]:
+        return self.target_body.site_world(self._time if t is None else t, self._site_angle)
 
-    def _mars_site_world(self, t=None):
-        mx, my = self._mars_world(t)
-        a = self._mars_angle(t) + self._site_angle
-        return (mx + self.target.radius * math.cos(a), my + self.target.radius * math.sin(a))
-
-    _moon_world = _mars_world
-    _moon_velocity = _mars_velocity
-    _moon_site_world = _mars_site_world
-
-    def rocket_helio(self):
+    def rocket_helio(self) -> tuple[float, float, float, float]:
         """Rocket position and velocity relative to the star."""
         hx, hy = self._home_helio()
         hvx, hvy = self._home_helio_velocity()
@@ -209,26 +214,20 @@ class ToMarsEnv(TwoStageToOrbitEnv):
     # --- geometry --------------------------------------------------------------
 
     def _mars_distance(self) -> float:
-        mx, my = self._mars_world()
-        return math.hypot(self._rx - mx, self._ry - my)
+        return self.target_body.distance(self._rx, self._ry, self._time)
 
     def _mars_site_distance(self) -> float:
         sx, sy = self._mars_site_world()
         return math.hypot(self._rx - sx, self._ry - sy)
 
     def _sun_distance(self) -> float:
-        sx, sy = self._sun_world()
-        return math.hypot(self._rx - sx, self._ry - sy)
+        return self.sun_body.distance(self._rx, self._ry, self._time)
 
     def _in_mars_soi(self) -> bool:
-        return self._mars_distance() <= self.mars_soi
+        return self.target_body.in_soi(self._rx, self._ry, self._time)
 
     def _in_planet_soi(self) -> bool:
         return math.hypot(self._rx, self._ry) <= self.planet_soi
-
-    _moon_distance = _mars_distance
-    _moon_site_distance = _mars_site_distance
-    _in_moon_soi = _in_mars_soi
 
     def soi(self) -> str:
         if self._in_mars_soi():
@@ -238,57 +237,17 @@ class ToMarsEnv(TwoStageToOrbitEnv):
         return "sun"
 
     def _mars_orbit_elements(self):
-        mx, my = self._mars_world()
-        mvx, mvy = self._mars_velocity()
-        return _elements(
-            self.target.mu,
-            self.target.radius,
-            self._rx - mx,
-            self._ry - my,
-            self._vx - mvx,
-            self._vy - mvy,
-        )
-
-    _moon_orbit_elements = _mars_orbit_elements
+        return self.target_body.elements(self._rx, self._ry, self._vx, self._vy, self._time)
 
     def _helio_elements(self):
         x, y, vx, vy = self.rocket_helio()
         return _elements(self.star.mu, self.star.radius, x, y, vx, vy)
 
     def _mars_impact(self) -> tuple[bool, float]:
-        """Where the current target-relative conic meets the target's surface:
-        (impacting, signed angle from the site to that point). Same
-        instrument as ToMoon's impact predictor."""
-        mx, my = self._mars_world()
-        mvx, mvy = self._mars_velocity()
-        px, py = self._rx - mx, self._ry - my
-        wx, wy = self._vx - mvx, self._vy - mvy
-        mu, R = self.target.mu, self.target.radius
-        r = math.hypot(px, py)
-        theta_r = math.atan2(py, px)
-        site = self._mars_angle() + self._site_angle
-        if r <= R:
-            return True, _wrap_pi(theta_r - site)
-        h = px * wy - py * wx
-        v2 = wx * wx + wy * wy
-        rv = px * wx + py * wy
-        ex = ((v2 - mu / r) * px - rv * wx) / mu
-        ey = ((v2 - mu / r) * py - rv * wy) / mu
-        ecc = math.hypot(ex, ey)
-        if ecc < 1e-9 or abs(h) < 1.0:
-            return abs(h) < 1.0, _wrap_pi(theta_r - site)
-        p_param = h * h / mu
-        f0 = math.copysign(math.acos(max(-1.0, min(1.0, (p_param / r - 1.0) / ecc))), rv)
-        sgn = math.copysign(1.0, h)
-        cos_fi = (p_param / R - 1.0) / ecc
-        if cos_fi > 1.0:
-            if 0.5 * v2 - mu / r >= 0.0 and rv > 0.0:
-                return False, _wrap_pi(theta_r - site)
-            return False, _wrap_pi(theta_r + sgn * (-f0 % TWO_PI) - site)
-        fi = math.acos(max(-1.0, min(1.0, cos_fi)))
-        return True, _wrap_pi(theta_r + sgn * ((-fi - f0) % TWO_PI) - site)
-
-    _moon_impact = _mars_impact
+        """(impacting, signed angle from the site to the predicted touchdown)."""
+        return self.target_body.impact(
+            self._rx, self._ry, self._vx, self._vy, self._time, self._site_angle
+        )
 
     def _is_escaping(self) -> bool:
         # Planet-hyperbolic is the whole point of the transfer; only a
@@ -302,31 +261,15 @@ class ToMarsEnv(TwoStageToOrbitEnv):
 
     def _extra_acceleration(self, rx: float, ry: float, vx: float, vy: float):
         ax = ay = 0.0
-        for (bx, by), mu, soft in (
-            (self._sun_world(), self.star.mu, self.star.radius),
-            (self._mars_world(), self.target.mu, 0.25 * self.target.radius),
-        ):
-            dx, dy = bx - rx, by - ry
-            r2 = max(dx * dx + dy * dy, soft * soft)
-            inv = mu / (r2 * math.sqrt(r2))
-            # minus the same body's pull on the planet at the origin
-            b2 = bx * bx + by * by
-            invb = mu / (b2 * math.sqrt(b2))
-            ax += dx * inv - bx * invb
-            ay += dy * inv - by * invb
-        # target atmosphere: drag on the target-relative velocity
-        if self.target.rho0 > 0.0:
-            mx, my = self._mars_world()
-            alt = math.hypot(rx - mx, ry - my) - self.target.radius
-            if alt < self.target.space_altitude:
-                rho = self.target.density(alt)
-                mvx, mvy = self._mars_velocity()
-                wx, wy = vx - mvx, vy - mvy
-                speed = math.hypot(wx, wy)
-                k = -0.5 * rho * self.rocket.stages[self._stage].cd_area * speed / self._mass
-                ax += k * wx
-                ay += k * wy
-        return ax, ay
+        t = self._time
+        for body in self.bodies:
+            gx, gy = body.gravity(rx, ry, t)
+            ax += gx
+            ay += gy
+        dx, dy = self.target_body.drag(
+            rx, ry, vx, vy, t, self.rocket.stages[self._stage].cd_area, self._mass
+        )
+        return ax + dx, ay + dy
 
     # --- reward ----------------------------------------------------------------
 
@@ -472,14 +415,6 @@ class ToMarsEnv(TwoStageToOrbitEnv):
                 "lead_angle": _wrap_pi(self._mars_angle() - self._home_angle()),
                 "orbit_progress": min(1.0, self._orbit_angle / self._required_angle),
                 "transfer": self._transfer,
-                # renderer-compatible aliases
-                "moon_x": mx,
-                "moon_y": my,
-                "moon_radius": self.target.radius,
-                "moon_distance": d,
-                "moon_rel_speed": rel,
-                "moon_soi": self.mars_soi,
-                "moon_site_distance": self._mars_site_distance(),
                 "site_angle": self._site_angle,
             }
         )

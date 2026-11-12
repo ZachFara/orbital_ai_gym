@@ -33,8 +33,9 @@ from typing import Any
 
 import numpy as np
 
+from ..bodies import CelestialBody
 from ..presets import MOONS, PLANETS, Moon, Planet, Rocket
-from .to_orbit import TWO_PI, TwoStageToOrbitEnv, _elements, _wrap_pi
+from .to_orbit import TWO_PI, TwoStageToOrbitEnv, _wrap_pi
 
 
 class ToMoonEnv(TwoStageToOrbitEnv):
@@ -74,11 +75,15 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         if rocket is None and planet_obj.name == "easy":
             rocket = "moon"  # the ~10 km/s preset: the mission's real budget
 
-        # KSP-style sphere of influence (Laplace radius). Inside it the
-        # elements in info, the escape logic, and the renderer all switch
-        # to the moon's frame -- a rocket braking onto the moon is planet-
-        # hyperbolic, and judging it by planet-centric elements is nonsense.
-        self.moon_soi = self.moon.orbit_radius * (self.moon.mu / planet_obj.mu) ** 0.4
+        # The moon as a body on rails about the planet at the origin. Its
+        # KSP-style sphere of influence (Laplace radius) is where the elements
+        # in info, the escape logic and the renderer switch to the moon's
+        # frame -- a rocket braking onto the moon is planet-hyperbolic, and
+        # judging it by planet-centric elements is nonsense.
+        self.moon_body = CelestialBody.from_preset("moon", "moon", self.moon, planet_obj.mu)
+        self.target_body = self.moon_body
+        self.bodies = [self.moon_body]
+        self.moon_soi = self.moon_body.soi
 
         self.orbit_fraction = orbit_fraction
         self.hold_reward = hold_reward
@@ -134,35 +139,22 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         the next reset that overrides it. Dynamics are unaffected."""
         self._site_angle = float(site_angle)
 
-    # --- moon kinematics ------------------------------------------------------
+    # --- moon kinematics: thin names over the body ----------------------------
 
     def _moon_angle(self) -> float:
-        return TWO_PI * (self._time / self.moon.orbit_period)
+        return self.moon_body.angle(self._time)
 
     def _moon_world(self) -> tuple[float, float]:
-        a = self._moon_angle()
-        return (
-            self.moon.orbit_radius * math.cos(a),
-            self.moon.orbit_radius * math.sin(a),
-        )
+        return self.moon_body.position(self._time)
 
     def _moon_velocity(self) -> tuple[float, float]:
-        a = self._moon_angle()
-        w = TWO_PI / self.moon.orbit_period
-        r = self.moon.orbit_radius
-        return (-w * r * math.sin(a), w * r * math.cos(a))
+        return self.moon_body.velocity(self._time)
 
     def _moon_site_world(self) -> tuple[float, float]:
-        mx, my = self._moon_world()
-        a = self._moon_angle() + self._site_angle
-        return (
-            mx + self.moon.radius * math.cos(a),
-            my + self.moon.radius * math.sin(a),
-        )
+        return self.moon_body.site_world(self._time, self._site_angle)
 
     def _moon_distance(self) -> float:
-        mx, my = self._moon_world()
-        return math.hypot(self._rx - mx, self._ry - my)
+        return self.moon_body.distance(self._rx, self._ry, self._time)
 
     def _moon_site_distance(self) -> float:
         sx, sy = self._moon_site_world()
@@ -177,63 +169,18 @@ class ToMoonEnv(TwoStageToOrbitEnv):
         return _wrap_pi(math.atan2(sy - self._ry, sx - self._rx) - math.atan2(self._ry, self._rx))
 
     def _in_moon_soi(self) -> bool:
-        return self._moon_distance() <= self.moon_soi
+        return self.moon_body.in_soi(self._rx, self._ry, self._time)
 
     def _moon_orbit_elements(self):
         """(periapsis_alt, apoapsis_alt, energy, ecc) relative to the moon."""
-        mx, my = self._moon_world()
-        mvx, mvy = self._moon_velocity()
-        return _elements(
-            self.moon.mu,
-            self.moon.radius,
-            self._rx - mx,
-            self._ry - my,
-            self._vx - mvx,
-            self._vy - mvy,
-        )
+        return self.moon_body.elements(self._rx, self._ry, self._vx, self._vy, self._time)
 
     def _moon_impact(self) -> tuple[bool, float]:
-        """Where the current moon-relative conic meets the moon.
-
-        Returns (impacting, miss): whether the coasting trajectory ahead of
-        the rocket reaches the surface, and the signed angle around the moon
-        from the landing site to that surface point (to the next periapsis
-        point when it doesn't reach). Two-body prediction in the moon frame:
-        exact for the terminal descent, bent by the planet's tide over long
-        coasts -- an instrument, not an oracle.
-        """
-        mx, my = self._moon_world()
-        mvx, mvy = self._moon_velocity()
-        px, py = self._rx - mx, self._ry - my
-        wx, wy = self._vx - mvx, self._vy - mvy
-        mu, R = self.moon.mu, self.moon.radius
-        r = math.hypot(px, py)
-        theta_r = math.atan2(py, px)
-        site = self._moon_angle() + self._site_angle
-        if r <= R:
-            return True, _wrap_pi(theta_r - site)
-        h = px * wy - py * wx
-        v2 = wx * wx + wy * wy
-        rv = px * wx + py * wy
-        ex = ((v2 - mu / r) * px - rv * wx) / mu
-        ey = ((v2 - mu / r) * py - rv * wy) / mu
-        ecc = math.hypot(ex, ey)
-        if ecc < 1e-9 or abs(h) < 1.0:
-            # circular never lands; a radial drop lands straight below
-            return abs(h) < 1.0, _wrap_pi(theta_r - site)
-        p_param = h * h / mu
-        f0 = math.copysign(math.acos(max(-1.0, min(1.0, (p_param / r - 1.0) / ecc))), rv)
-        sgn = math.copysign(1.0, h)
-        cos_fi = (p_param / R - 1.0) / ecc
-        if cos_fi > 1.0:
-            # periapsis clears the surface: no impact ahead
-            if 0.5 * v2 - mu / r >= 0.0 and rv > 0.0:
-                return False, _wrap_pi(theta_r - site)  # outbound hyperbola
-            return False, _wrap_pi(theta_r + sgn * (-f0 % TWO_PI) - site)
-        # the conic dips below r=R at true anomaly -fi (rising back out at
-        # +fi); the next crossing forward of the rocket's anomaly f0 is impact
-        fi = math.acos(max(-1.0, min(1.0, cos_fi)))
-        return True, _wrap_pi(theta_r + sgn * ((-fi - f0) % TWO_PI) - site)
+        """(impacting, signed angle from the site to the predicted touchdown):
+        the body's two-body impact predictor, see `CelestialBody.impact`."""
+        return self.moon_body.impact(
+            self._rx, self._ry, self._vx, self._vy, self._time, self._site_angle
+        )
 
     def _is_escaping(self) -> bool:
         # Never declare an escape inside the moon's SOI: the rocket may be
@@ -249,15 +196,7 @@ class ToMoonEnv(TwoStageToOrbitEnv):
     def _extra_acceleration(
         self, rx: float, ry: float, vx: float, vy: float
     ) -> tuple[float, float]:
-        mx, my = self._moon_world()
-        dx = mx - rx
-        dy = my - ry
-        r2 = dx * dx + dy * dy
-        # Softening avoids pathological accelerations if the agent intersects
-        # the moon center in one step before collision handling runs.
-        r2 = max(r2, (0.25 * self.moon.radius) ** 2)
-        inv_r3 = 1.0 / (r2 * math.sqrt(r2))
-        return self.moon.mu * dx * inv_r3, self.moon.mu * dy * inv_r3
+        return self.moon_body.gravity(rx, ry, self._time)
 
     # --- Reward ---------------------------------------------------------------
 

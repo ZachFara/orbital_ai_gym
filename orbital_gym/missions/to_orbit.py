@@ -81,32 +81,10 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
+from ..kinematics import TWO_PI as TWO_PI
+from ..kinematics import elements as _elements
+from ..kinematics import wrap_pi as _wrap_pi
 from ..presets import G0, PLANETS, ROCKETS, Planet, Rocket, total_delta_v
-
-TWO_PI = 2.0 * math.pi
-
-
-def _wrap_pi(angle: float) -> float:
-    return (angle + math.pi) % TWO_PI - math.pi
-
-
-def _elements(mu: float, body_radius: float, rx: float, ry: float, vx: float, vy: float):
-    """Orbital elements of a body-relative state:
-    (periapsis_alt, apoapsis_alt, specific_energy, eccentricity).
-
-    Apoapsis is +inf on escape trajectories.
-    """
-    rn = math.hypot(rx, ry)
-    v2 = vx * vx + vy * vy
-    energy = 0.5 * v2 - mu / rn
-    h = rx * vy - ry * vx
-    ecc2 = 1.0 + 2.0 * energy * h * h / (mu * mu)
-    ecc = math.sqrt(max(0.0, ecc2))
-    if energy >= 0.0:
-        peri = (h * h / mu) / (1.0 + ecc) - body_radius if ecc > 0 else rn - body_radius
-        return peri, math.inf, energy, ecc
-    sma = -mu / (2.0 * energy)
-    return sma * (1.0 - ecc) - body_radius, sma * (1.0 + ecc) - body_radius, energy, ecc
 
 
 class TwoStageToOrbitEnv(gym.Env):
