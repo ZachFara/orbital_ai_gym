@@ -42,6 +42,7 @@ import numpy as np
 from gymnasium import spaces
 
 from ..autopilots import MoonAutopilot
+from ..guidance import Guidance
 from ..missions.to_moon import ToMoonEnv
 from ..missions.to_orbit import _wrap_pi
 
@@ -171,80 +172,6 @@ def load_bank(path: str = BANK_PATH, **kw) -> StateBank:
     return bank
 
 
-# --- zero-effort guidance quantities ------------------------------------------
-
-
-def conic_impact(mu: float, R: float, px: float, py: float, wx: float, wy: float):
-    """Coast the moon-relative state along its two-body conic to the surface.
-
-    Returns (reaches, dt, v_imp, vr_imp, vt_imp): whether the coasting path
-    ahead reaches r = R; the time until it does (or until the next periapsis
-    when it does not; inf when outbound on a hyperbola); the speed it would
-    have there (vis-viva), split into radial (negative = downward) and
-    tangential components (angular momentum). These are the zero-effort-miss
-    / zero-effort-velocity numbers that lunar-descent guidance laws act on.
-    """
-    r = math.hypot(px, py)
-    v2 = wx * wx + wy * wy
-    rv = px * wx + py * wy
-    h = px * wy - py * wx
-    ex = ((v2 - mu / r) * px - rv * wx) / mu
-    ey = ((v2 - mu / r) * py - rv * wy) / mu
-    e = math.hypot(ex, ey)
-    pp = h * h / mu
-    if r <= R:
-        return True, 0.0, math.sqrt(v2), rv / max(r, 1.0), h / max(r, 1.0)
-    if e < 1e-9 or pp < 1e-6:
-        if pp < 1e-6:  # radial drop: straight down, dt from energy
-            vimp = math.sqrt(max(0.0, v2 + 2.0 * mu * (1.0 / R - 1.0 / r)))
-            dt = 2.0 * (r - R) / max(1e-3, vimp + max(0.0, -rv / r)) if rv <= 0 else math.inf
-            return rv <= 0.0, dt, vimp, -vimp, 0.0
-        return False, math.inf, math.sqrt(v2), 0.0, math.sqrt(v2)
-    f0 = math.copysign(math.acos(max(-1.0, min(1.0, (pp / r - 1.0) / e))), rv)
-    cos_fi = (pp / R - 1.0) / e
-    reaches = cos_fi <= 1.0
-    if reaches:
-        fi = math.acos(max(-1.0, min(1.0, cos_fi)))
-        ft = -fi  # descending crossing of r = R
-        if e >= 1.0 and f0 > ft:  # hyperbolic and already past it: outbound
-            return False, math.inf, math.sqrt(v2), 0.0, math.sqrt(v2)
-        r_t = R
-    else:
-        ft = 0.0  # next periapsis
-        if e >= 1.0 and rv > 0.0:
-            return False, math.inf, math.sqrt(v2), 0.0, math.sqrt(v2)
-        r_t = pp / (1.0 + e)
-    if e < 1.0:
-        a = pp / (1.0 - e * e)
-        n = math.sqrt(mu / (a * a * a))
-
-        def mean_anom(f):
-            E = 2.0 * math.atan2(
-                math.sqrt(1.0 - e) * math.sin(f / 2.0), math.sqrt(1.0 + e) * math.cos(f / 2.0)
-            )
-            return E - e * math.sin(E)
-
-        dt = ((mean_anom(ft) - mean_anom(f0)) % TWO_PI_) / n
-    else:
-        a = pp / (e * e - 1.0)
-        n = math.sqrt(mu / (a * a * a))
-
-        def mean_anom(f):
-            t = math.sqrt((e - 1.0) / (e + 1.0)) * math.tan(f / 2.0)
-            t = max(-0.999999, min(0.999999, t))
-            H = 2.0 * math.atanh(t)
-            return e * math.sinh(H) - H
-
-        dt = max(0.0, (mean_anom(ft) - mean_anom(f0)) / n)
-    vimp = math.sqrt(max(0.0, v2 + 2.0 * mu * (1.0 / r_t - 1.0 / r)))
-    vt = h / r_t
-    vr = -math.sqrt(max(0.0, vimp * vimp - vt * vt))
-    return reaches, dt, vimp, vr, vt
-
-
-TWO_PI_ = 2.0 * math.pi
-
-
 # --- reward -------------------------------------------------------------------
 
 
@@ -284,7 +211,7 @@ class MoonLandingEnv(gym.Env):
     """Parking orbit -> soft touchdown on a random site. See module docstring."""
 
     metadata: ClassVar[dict[str, Any]] = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
-    N_EXTRA = 8  # zero-effort guidance channels, see _guidance_obs
+    N_EXTRA = Guidance.N_CHANNELS  # zero-effort guidance channels, see Guidance
 
     def __init__(
         self,
@@ -455,63 +382,21 @@ class MoonLandingEnv(gym.Env):
         self._dv0 = u._dv_used
         return self._obs(), self._info(u._info(), 0.0)
 
-    def _zem(self):
-        """Signed predicted miss (m, site -> touchdown along the surface) and
-        whether the coasting path reaches the surface.
-
-        Reaching: the conic impact point against where the site WILL be at
-        impact (the moon is tidally locked, so the site moves 81 m/s along
-        the surface; the env's own predictor compares against the site's
-        position now, a 16 km bias at the start of a 200 s fall).
-        Not reaching (orbit): the touchdown of a standard stop-and-drop
-        started now: burn horizontal speed to zero at ~0.9 a_max (drifting
-        half the burn), fall, and the site moves meanwhile. The two are
-        blended by horizontal speed so the gauge is continuous through the
-        retro burn instead of jumping from "periapsis of a circular orbit"
-        to "grazing ballistic 450 km downrange" when the burn starts.
-        """
-        u = self.env
-        mx, my = u._moon_world()
-        mvx, mvy = u._moon_velocity()
-        px, py = u._rx - mx, u._ry - my
-        wx, wy = u._vx - mvx, u._vy - mvy
-        R, mu = u.moon.radius, u.moon.mu
-        d = max(1.0, math.hypot(px, py))
-        theta_v = math.atan2(py, px)
-        theta_s = u._moon_angle() + u._site_angle
-        w_m = TWO_PI_ / u.moon.orbit_period
-        h = px * wy - py * wx
-        v_t = h / d  # CCW tangential speed
-        a_h = 0.9 * u.rocket.stages[u._stage].thrust / u._mass
-        g_m = mu / (d * d)
-        t_b = abs(v_t) / max(1.0, a_h)
-        t_f = 1.2 * math.sqrt(2.0 * max(0.0, d - R) / g_m)
-        theta_td = theta_v + (v_t / d) * t_b / 2.0
-        theta_site_td = theta_s + w_m * (t_b + t_f)
-        m_virtual = _wrap_pi(theta_td - theta_site_td) * R
-        reaches, dt, *_ = conic_impact(mu, R, px, py, wx, wy)
-        if not reaches or not math.isfinite(dt):
-            return m_virtual, False
-        _, miss = u._moon_impact()
-        m_actual = _wrap_pi(miss - w_m * dt) * R
-        lam = min(1.0, abs(v_t) / 300.0)
-        return lam * m_virtual + (1.0 - lam) * m_actual, True
+    def _guidance(self) -> Guidance:
+        """The zero-effort landing instruments for the current state (one
+        object serves both the observation channels and the potential)."""
+        return Guidance.from_env(self.env, self.env._site_angle)
 
     def _potential(self) -> float:
         u, rc = self.env, self.rc
         mvx, mvy = u._moon_velocity()
         v = math.hypot(u._vx - mvx, u._vy - mvy)
         phi = -rc.w_dist * u._moon_site_distance() / rc.d_scale - rc.w_speed * v / rc.v_scale
-        if rc.w_miss > 0.0 and u._in_moon_soi():
-            m, _ = self._zem()
-            # asinh: ~linear inside miss_scale/4, logarithmic beyond, so the
-            # orbit-to-touchdown swing does not dwarf the last 20 km. In orbit
-            # this is the stop-and-drop virtual miss, which gives a continuous
-            # timing gradient while coasting toward the right phase (v7-v10
-            # held it constant there and the timing had to come from the
-            # terminal reward alone, hundreds of steps away)
-            phi -= rc.w_miss * math.asinh(abs(m) / (0.25 * rc.miss_scale)) / 3.0
-        return phi
+        # asinh-shaped miss term; in orbit it is the stop-and-drop virtual
+        # miss, which gives a continuous timing gradient while coasting toward
+        # the right phase (v7-v10 held it constant there and the timing had to
+        # come from the terminal reward alone, hundreds of steps away)
+        return phi + self._guidance().miss_potential(rc.w_miss, rc.miss_scale)
 
     def _moon_frame(self):
         u = self.env
@@ -605,41 +490,7 @@ class MoonLandingEnv(gym.Env):
         return self._obs(), float(reward), terminated, truncated, self._info(info, native_r)
 
     def _guidance_obs(self) -> np.ndarray:
-        """Zero-effort miss / velocity: where and how fast the coasting path
-        hits the moon, how long until it does, and whether full thrust can
-        still stop it. Zero outside the moon's sphere of influence."""
-        u = self.env
-        mx, my = u._moon_world()
-        mvx, mvy = u._moon_velocity()
-        px, py = u._rx - mx, u._ry - my
-        d = math.hypot(px, py)
-        if d > u.moon_soi:
-            return np.zeros(self.N_EXTRA, np.float32)
-        wx, wy = u._vx - mvx, u._vy - mvy
-        R, mu = u.moon.radius, u.moon.mu
-        reaches, dt, vimp, vr_i, vt_i = conic_impact(mu, R, px, py, wx, wy)
-        m_signed, _ = self._zem()  # site -> touchdown, m, signed
-        malt = max(1.0, d - R)
-        a_max = u.rocket.stages[u._stage].thrust / u._mass
-        g = mu / (d * d)
-        a_net = max(0.5, a_max - g)
-        stop_ratio = vimp * vimp / (2.0 * a_net * malt)  # >1: cannot stop in time
-        brake_dv = vimp * (1.0 + g / a_net)  # retro burn incl. gravity loss
-        dv_rem = max(1.0, u.delta_v_remaining())
-        return np.array(
-            [
-                vimp / 1_000.0,
-                vr_i / 1_000.0,
-                vt_i / 1_000.0,
-                math.log1p(min(dt, 20_000.0)) / 10.0,
-                math.asinh(m_signed / 5_000.0) / 3.0,  # signed ZEM: asinh scale,
-                # 8 km -> 0.42, 300 km -> 1.6
-                min(2.0, stop_ratio) / 2.0,
-                min(2.0, brake_dv / dv_rem) / 2.0,
-                1.0 if reaches else 0.0,
-            ],
-            np.float32,
-        )
+        return self._guidance().channels()
 
     def _obs(self) -> np.ndarray:
         base = self.env._obs()
