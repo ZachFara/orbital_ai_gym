@@ -3,7 +3,7 @@
 ## Status (2026-11-12)
 
 Phase 1 merged (PR #1); repository public with branch protection. Phase 2
-in progress: A1-A4 done. Four missions exist and are solved by scripted pilots;
+in progress: A1-A5 done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -39,7 +39,7 @@ tests for new behaviour, PR merged, this file updated.
   body and a state; used by the observation and the potential. Done:
   `MoonLandingEnv._guidance_obs` and `_potential` call it; the predictor
   test still matches brute-force coasting. Depends on A3.
-- [ ] **A5 Retire superseded trainers.** Delete `scripts/train_her.py`
+- [x] **A5 Retire superseded trainers.** Delete `scripts/train_her.py`
   and `scripts/train_guided.py` (their diagnoses are in `EXPERIMENTS.md`);
   keep `train_ppo.py` as the plain baseline. Done: README no longer
   mentions them; their `pyproject.toml` baseline entries are deleted.
@@ -119,8 +119,7 @@ where listed) and delete its entry from `pyproject.toml`.
 - [ ] F4 `orbital_gym/autopilots/*` (also the `__call__` methods and
   `lambert` complexity; folds into A2)
 - [ ] F5 `scripts/fly_manual.py`, `fly_moon_policy.py`, `train_ppo.py`
-- [ ] F6 `scripts/train_moon_rl.py` (folds into A6); `train_guided.py` and
-  `train_her.py` are deleted by A5 instead
+- [ ] F6 `scripts/train_moon_rl.py` (folds into A6)
 - [ ] F7 `tests/test_env.py`, `test_orbit_and_return.py`, `test_to_moon.py`,
   `test_to_mars.py`
 
@@ -138,4 +137,4 @@ hold; background training runs allowed; tasks strictly in listed order.
 
 ## Next steps
 
-1. A5 (retire superseded trainers), then A6 onward in order.
+1. A6 (trainer defaults and `TrainingRun`), then A7 onward in order.

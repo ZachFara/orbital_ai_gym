@@ -33,7 +33,7 @@ class MoonAutopilot(Pilot):
     Tuned on the "easy" planet/moon pair; the delta-v budget does not close
     on "earth". On "easy" it touches down at the descent profile's ~8 m/s
     floor with ~3.4 km/s to spare -- but a couple hundred km off the site.
-    Reaching the site is what train_guided.py leaves for RL to learn.
+    Reaching the site is what the RL task (orbital_gym.rl) learns.
     """
 
     PERI_FRAC = 1.03  # parking-orbit periapsis, * atmosphere cutoff
@@ -84,7 +84,7 @@ class MoonAutopilot(Pilot):
         # descent -- the setup the from-orbit RL landing trains against.
         self.orbit = orbit
         # Site targeting is opt-in: off, the pilot is the frozen soft-landing
-        # baseline every test, train_guided cache, and default flight relies on
+        # baseline every test, the RL state bank, and default flight relies on
         # (lands ~290 km off site at 8 m/s). On, it aims the approach at the
         # env's site during the coast. It reaches sites within a cone of the
         # natural landing; far sites (e.g. the preset 0 deg) are out of reach

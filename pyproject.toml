@@ -58,8 +58,6 @@ mccabe.max-complexity = 12
 "orbital_gym/rendering.py" = ["C901"]
 "orbital_gym/autopilots/*.py" = ["C901"]
 "scripts/fly_manual.py" = ["C901"]
-"scripts/train_guided.py" = ["C901"]
-"scripts/train_her.py" = ["C901"]
 "scripts/train_moon_rl.py" = ["C901"]
 
 [tool.mypy]
@@ -86,8 +84,6 @@ module = [
     "scripts.autopilot_demo",
     "scripts.fly_manual",
     "scripts.fly_moon_policy",
-    "scripts.train_guided",
-    "scripts.train_her",
     "scripts.train_moon_rl",
     "scripts.train_ppo",
     "tests.test_env",

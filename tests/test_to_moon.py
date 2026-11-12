@@ -99,7 +99,7 @@ def test_moon_autopilot_soft_lands_on_the_moon():
     """The scripted pilot flies the full profile on the "moon" rocket:
     hold, transfer, retro braking, and a soft touchdown. It lands well off
     the site -- putting it ON the site is the learning problem
-    (train_guided.py), not the autopilot's job.
+    (orbital_gym.rl), not the autopilot's job.
     """
     from orbital_gym.autopilots import MoonAutopilot
 
