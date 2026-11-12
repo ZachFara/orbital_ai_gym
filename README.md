@@ -37,6 +37,8 @@ presets, and the renderer:
 | `ToMars-v0` | three stages: escape the planet, cross a star system, land on a Mars-like planet |
 | `MoonLandingFromOrbit-v0` | practice: the moon mission's last leg, parking orbit to a soft touchdown on the site |
 | `MarsLandingFromOrbit-v0` | practice: the same leg at the Mars-like target, from a 150 km parking orbit through a thin atmosphere |
+| `ToMoon-v1` | the moon mission on landing legs: contact limits and a 5 s touchdown hold (decision 0010) |
+| `MoonLandingFromOrbit-v1` | practice: the landing leg under the v1 rules |
 
 **ToMoon** adds a moon on rails (circular orbit, closed-form position) whose
 gravity pulls on the rocket. After the same climb-and-hold as the return
@@ -236,6 +238,22 @@ follow the body (2.5 radii, the parking-orbit speed, 2.5 site radii) and
 the rest of the recipe is unchanged. No policy has been trained on it yet
 (see `PROGRESS.md`, E1).
 
+### v1 landing rules
+
+`ToMoon-v1` and `MoonLandingFromOrbit-v1` give the lander legs
+(`orbital_gym/touchdown.py`, decision 0010). Contact must be under 5 m/s
+vertically, 3 m/s along the surface and 15° off the local vertical, or the
+episode ends as `crashed` with `info["touchdown_limit"]` naming the limit.
+A good contact puts the rocket on its legs; the landing counts only after
+5 s on the surface with the engine effectively off (thrust under 10 % of
+local weight). Lighting the engine starts the hold over, lifting off
+resets it and flight resumes. Two observation channels are appended
+(on the legs, hold progress) and `info` carries `contact` and
+`hold_progress`. Speeds are measured against the moon's centre like every
+other instrument here; the ground's own rotation is not a landing error.
+v0 is untouched; `ToMoonEnv(touchdown=TouchdownRules(...))` sets the
+limits yourself.
+
 The reference result (run `ppo-zem-v15-polish`, see `EXPERIMENTS.md`),
 flown from the launch pad on a 48-site grid:
 
@@ -270,16 +288,22 @@ python scripts/benchmark.py --ppo MoonLandingFromOrbit-v0=models/ppo-zem-v15-pol
 | `ToMoon-v0` | autopilot | 8 | 88% | 3032 | 8444 | 5615 | landed_moon_site 7, landed_moon 1 |
 | `ToMars-v0` | random | 8 | 0% | -101 | 681 | 66 | crashed 8 |
 | `ToMars-v0` | autopilot | 8 | 0% | 2121 | 8600 | 16100 | landed_mars 8 |
+| `ToMoon-v1` | random | 8 | 0% | -100 | 488 | 39 | crashed 8 |
+| `ToMoon-v1` | autopilot | 8 | 88% | 3032 | 8448 | 5620 | landed_moon_site 7, landed_moon 1 |
 | `MoonLandingFromOrbit-v0` | random | 16 | 0% | -7 | 9502 | 828 | crashed 13, window_limit 2, escaped 1 |
 | `MoonLandingFromOrbit-v0` | autopilot | 16 | 81% | 12 | 8431 | 727 | landed_moon_site 13, landed_moon 3 |
 | `MoonLandingFromOrbit-v0` | ppo | 16 | 100% | 14 | 7993 | 639 | landed_moon_site 16 |
 | `MarsLandingFromOrbit-v0` | random | 16 | 0% | -8 | 11612 | 4086 | window_limit 12, crashed 4 |
 | `MarsLandingFromOrbit-v0` | autopilot | 16 | 0% | 5 | 8609 | 2565 | landed_mars 16 |
+| `MoonLandingFromOrbit-v1` | random | 16 | 0% | -7 | 9494 | 828 | crashed 13, window_limit 2, escaped 1 |
+| `MoonLandingFromOrbit-v1` | autopilot | 16 | 81% | 12 | 8435 | 733 | landed_moon_site 13, landed_moon 3 |
 
 Read the rows as the state of the ladder, not a leaderboard: the moon pilot
 lands on the site 7 of 8 times from the pad; the Mars pilot lands soft every
 time but ~100 km off a 20 km site, so `MarsLandingFromOrbit-v0` is open; the
-learned moon policy beats its own expert from orbit (16 of 16).
+learned moon policy beats its own expert from orbit (16 of 16). The v1
+rows are the same flights under the landing-legs rules: the pilot already
+holds; the policy has not been trained on them yet (C2).
 
 | `ToMoon-v0`, orbit-first pilot | `MoonLandingFromOrbit-v0`, PPO |
 |---|---|

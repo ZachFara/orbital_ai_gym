@@ -3,7 +3,7 @@
 ## Status (2026-11-12)
 
 Phase 1 merged (PR #1); repository public with branch protection. Phase 2
-in progress: A and B done. Four missions exist and are solved by scripted pilots;
+in progress: A, B and C1 done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -103,13 +103,15 @@ tests for new behaviour, PR merged, this file updated.
 
 ### C. v1 landing rules
 
-- [ ] **C1 Landing legs and the touchdown hold.** `ToMoon-v1` and
-  `MoonLandingFromOrbit-v1`: touchdown requires vertical speed, horizontal
-  speed and tilt under limits, then 5 s on the surface with the engine
-  effectively off (clock resets on lift-off); contact flag and hold
-  progress in the observation; bonus paid after the hold. v0 untouched.
-  Done: tests for each limit and for the reset; the autopilot still
-  passes. Depends on A3, B1.
+- [x] **C1 Landing legs and the touchdown hold.** `TouchdownRules`
+  (`orbital_gym/touchdown.py`), a `touchdown` knob on `ToMoonEnv`
+  (None = v0 exactly), `ToMoon-v1` and `MoonLandingFromOrbit-v1` registered
+  (own bank), contact checked every physics substep, the pilots sit still
+  on the legs. Speeds are moon-centre-relative like every other instrument
+  (decision 0010). Done: `tests/test_touchdown.py` covers each limit, the
+  hold, the reset on lift-off and the engine-on restart, the channels, v0
+  untouched and the orbit-first pilot landing on the legs (7/8 on site in
+  the benchmark). Depends on A3, B1.
 - [ ] **C2 Fine-tune the lander under v1.** Resume the v15 checkpoint on
   v1, log the run, report the 48-site result. Done: entry in
   `EXPERIMENTS.md` with the number. Depends on C1, A6.
@@ -165,4 +167,4 @@ hold; background training runs allowed; tasks strictly in listed order.
 
 ## Next steps
 
-1. C1 (landing legs and the 5 s hold as `-v1` envs), then C2 onward in order.
+1. C2 (fine-tune the lander under v1), then D1 onward in order.

@@ -29,9 +29,10 @@ PILOTS: dict[str, Callable[[Any], Any]] = {
     "OrbitAndReturn-v0": ReturnAutopilot,
     "ToMoon-v0": lambda env: MoonAutopilot(env, orbit=True),
     "ToMars-v0": MarsAutopilot,
+    "ToMoon-v1": lambda env: MoonAutopilot(env, orbit=True),
 }
-SITE_MISSIONS = ("ToMoon-v0", "ToMars-v0")
-PRACTICE_IDS = ("MoonLandingFromOrbit-v0", "MarsLandingFromOrbit-v0")
+SITE_MISSIONS = ("ToMoon-v0", "ToMars-v0", "ToMoon-v1")
+PRACTICE_IDS = ("MoonLandingFromOrbit-v0", "MarsLandingFromOrbit-v0", "MoonLandingFromOrbit-v1")
 ENV_IDS = (*PILOTS, *PRACTICE_IDS)
 POLICIES = ("random", "autopilot", "ppo")
 

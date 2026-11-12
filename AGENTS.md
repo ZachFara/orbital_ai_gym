@@ -63,6 +63,9 @@ Tool versions and the dev extra are in `pyproject.toml`.
 - Registered env ids are immutable benchmarks (decision 0006). New rules
   mean a new `-vN` id. Practice ids pin the reference recipe (decision
   0008); every env reports `info["success"]`.
+- Under the v1 landing rules (`touchdown=TouchdownRules()`) a landing is a
+  5 s hold on the legs; the pilots sit still when `info["contact"]` is set.
+  Contact is checked per physics substep (decision 0010).
 - The README benchmark table is the output of `python scripts/benchmark.py`
   (decision 0009). A change that moves a row ships with the regenerated
   table.
