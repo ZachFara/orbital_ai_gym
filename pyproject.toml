@@ -15,7 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 render = ["pygame>=2.5"]
-train = ["stable-baselines3>=2.3", "mlflow>=3", "imageio>=2.30"]
+train = ["stable-baselines3>=2.3", "mlflow>=3", "imageio>=2.30", "moviepy>=2.1"]
 dev = [
     "pytest>=8",
     "ruff>=0.14",
@@ -58,7 +58,6 @@ mccabe.max-complexity = 12
 "orbital_gym/rendering.py" = ["C901"]
 "orbital_gym/autopilots/*.py" = ["C901"]
 "scripts/fly_manual.py" = ["C901"]
-"scripts/train_moon_rl.py" = ["C901"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -84,7 +83,6 @@ module = [
     "scripts.autopilot_demo",
     "scripts.fly_manual",
     "scripts.fly_moon_policy",
-    "scripts.train_moon_rl",
     "scripts.train_ppo",
     "tests.test_env",
     "tests.test_orbit_and_return",

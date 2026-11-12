@@ -8,7 +8,8 @@ environment scores it, not the training reward.
 
     python scripts/fly_moon_policy.py models/<run>/best.zip                  # 16 sites
     python scripts/fly_moon_policy.py models/<run>/best.zip --site 45 --render
-    python scripts/fly_moon_policy.py models/<run>/best.zip --site 45 --gif landing.gif
+    python scripts/fly_moon_policy.py models/<run>/best.zip --site 45 --video landing.mp4
+    python scripts/fly_moon_policy.py models/<run>/best.zip --site 45 --video landing.gif
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ def fly(
     extra_obs: bool,
     throttle_map: str,
     render: bool = False,
-    gif: str | None = None,
+    video: str | None = None,
     every: int = 4,
 ):
     bank = load_bank(verbose=False)
@@ -43,7 +44,7 @@ def fly(
         state_noise=0.0,
         extra_obs=extra_obs,
         throttle_map=throttle_map,
-        render_mode="human" if render else ("rgb_array" if gif else None),
+        render_mode="human" if render else ("rgb_array" if video else None),
     )
     u = env.env
     frames = []
@@ -51,7 +52,7 @@ def fly(
     u.reset(options={"site_angle": math.radians(site_deg)})
     for i, a in enumerate(bank.prefix_actions):
         _, _, term, trunc, info = u.step(a)
-        if gif and i % (every * 8) == 0:
+        if video and i % (every * 8) == 0:
             frames.append(u.render())
         assert not (term or trunc), "prefix ended early"
     prefix_return = u._episode_return
@@ -69,14 +70,10 @@ def fly(
         n += 1
         if render:
             u.render()
-        if gif and n % every == 0:
+        if video and n % every == 0:
             frames.append(u.render())
-    if gif and frames:
-        import imageio
-
-        frames = [f for f in frames if f is not None]
-        imageio.mimsave(gif, frames, duration=1 / 20, loop=0)
-        print(f"wrote {gif} ({len(frames)} frames)")
+    if video and frames:
+        save_video(video, [f for f in frames if f is not None])
     env.close()
     return dict(
         site=site_deg,
@@ -91,8 +88,24 @@ def fly(
     )
 
 
+def save_video(path: str, frames: list, fps: int = 20) -> None:
+    """Write the frames as a GIF (imageio) or a video file such as .mp4
+    (moviepy, the encoder behind gymnasium's RecordVideo), by extension."""
+    if path.lower().endswith(".gif"):
+        import imageio
+
+        imageio.mimsave(path, frames, duration=1 / fps, loop=0)
+    else:
+        from moviepy import ImageSequenceClip
+
+        ImageSequenceClip(frames, fps=fps).write_videofile(path, logger=None)
+    print(f"wrote {path} ({len(frames)} frames)")
+
+
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("model")
     ap.add_argument(
         "--site", type=float, default=None, help="site angle, deg (default: 16-site grid)"
@@ -101,7 +114,9 @@ def main():
     ap.add_argument("--no-extra-obs", action="store_true")
     ap.add_argument("--throttle-map", default="exp")
     ap.add_argument("--render", action="store_true")
-    ap.add_argument("--gif", default=None)
+    ap.add_argument(
+        "--video", "--gif", default=None, help="record a single-site flight (.mp4, .gif, ...)"
+    )
     args = ap.parse_args()
     model = PPO.load(args.model, device="cpu")
     sites = (
@@ -117,7 +132,7 @@ def main():
             not args.no_extra_obs,
             args.throttle_map,
             args.render,
-            args.gif if len(sites) == 1 else None,
+            args.video if len(sites) == 1 else None,
         )
         rows.append(r)
         print(

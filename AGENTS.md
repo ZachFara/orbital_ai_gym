@@ -45,7 +45,7 @@ make fmt              # apply the formatter and ruff's safe fixes
 python scripts/autopilot_demo.py --mission moon --render     # watch a scripted flight
 python scripts/fly_manual.py --mission orbit                  # fly by hand
 python scripts/train_moon_rl.py --name <run> --hypothesis "…" # train (logs to MLflow)
-python scripts/fly_moon_policy.py models/<run>/best.zip       # full mission with a policy
+python scripts/fly_moon_policy.py models/<run>/best.zip       # full mission with a policy (--video x.mp4)
 python scripts/explog.py                                      # the experiment table
 ```
 
@@ -57,6 +57,9 @@ Tool versions and the dev extra are in `pyproject.toml`.
 - The env's hover-relative throttle (`hover_control=True`) maps `a0` through
   `hover * exp(3 a0)`; `a0 <= -0.98` is engine-off. Policies with an
   unbounded Gaussian mean get trapped at "off"; the trainer bounds the mean.
+- `orbital_gym.rl.trainer.TrainConfig` IS the reference recipe: change a
+  default only with a run in `EXPERIMENTS.md` that beats it. The CLI flags
+  of `scripts/train_moon_rl.py` are generated from its fields.
 - Registered env ids are immutable benchmarks (decision 0006). New rules
   mean a new `-vN` id.
 - `ToMarsEnv` exposes its target through the moon hook names

@@ -188,7 +188,8 @@ a PPO policy flies the deorbit, the powered descent and the touchdown to a
 random site. The task lives in `orbital_gym/rl/moon_landing.py` (expert
 state bank, curriculum from the last metres back to anywhere in orbit,
 moon-frame actions, zero-effort guidance channels, potential-based
-shaping); the trainer in `scripts/train_moon_rl.py` logs every run to
+shaping); the trainer (`orbital_gym/rl/trainer.py`, driven by
+`scripts/train_moon_rl.py`, whose defaults are the reference recipe) logs every run to
 MLflow with a hypothesis, outcome and diagnosis (`python scripts/explog.py`
 prints the table; `EXPERIMENTS.md` mirrors it).
 
@@ -196,6 +197,7 @@ prints the table; `EXPERIMENTS.md` mirrors it).
 python scripts/train_moon_rl.py --name my-run --hypothesis "what this tries"
 python scripts/fly_moon_policy.py models/my-run/best.zip --sites 48   # full mission, from the pad
 python scripts/fly_moon_policy.py models/my-run/best.zip --site 90 --render
+python scripts/fly_moon_policy.py models/my-run/best.zip --site 90 --video landing.mp4
 ```
 
 The reference result (run `ppo-zem-v15-polish`, see `EXPERIMENTS.md`),
