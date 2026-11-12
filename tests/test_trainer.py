@@ -6,9 +6,10 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+import torch as th
 
 from orbital_gym.rl.landing import RewardConfig
-from orbital_gym.rl.trainer import TrainConfig, summarize
+from orbital_gym.rl.trainer import TrainConfig, summarize, widen_policy_params
 
 
 def test_defaults_are_the_reference_recipe() -> None:
@@ -65,3 +66,26 @@ def test_summarize_reads_the_episode_rows() -> None:
     out = summarize(rows, prefix_return=2500.0)
     assert out["on_site"] == 0.5 and out["crash"] == 0.5 and out["timeout"] == 0.0
     assert out["full_mission"] == pytest.approx(2700.0)
+
+
+def test_widening_inserts_zero_input_columns_and_keeps_the_rest() -> None:
+    g = th.Generator().manual_seed(0)
+    old = {
+        "mlp_extractor.policy_net.0.weight": th.randn(4, 6, generator=g),
+        "mlp_extractor.value_net.0.weight": th.randn(4, 6, generator=g),
+        "action_net.weight": th.randn(3, 4, generator=g),
+    }
+    new = widen_policy_params(old, at=4, count=2)
+    for key in ("mlp_extractor.policy_net.0.weight", "mlp_extractor.value_net.0.weight"):
+        w = new[key]
+        assert w.shape == (4, 8)
+        assert th.equal(w[:, :4], old[key][:, :4]) and th.equal(w[:, 6:], old[key][:, 4:])
+        assert th.all(w[:, 4:6] == 0.0)
+    assert new["action_net.weight"] is old["action_net.weight"]
+    # a padded observation gives the same pre-activation as the old one
+    x_old = th.randn(5, 6, generator=g)
+    x_new = th.cat([x_old[:, :4], th.randn(5, 2, generator=g), x_old[:, 4:]], dim=1)
+    assert th.allclose(
+        x_new @ new["mlp_extractor.policy_net.0.weight"].T,
+        x_old @ old["mlp_extractor.policy_net.0.weight"].T,
+    )

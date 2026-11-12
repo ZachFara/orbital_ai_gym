@@ -16,6 +16,7 @@ import copy
 import dataclasses
 import math
 import os
+import pickle
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -27,14 +28,20 @@ import torch as th
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.utils import explained_variance
-from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor, VecNormalize
+from stable_baselines3.common.vec_env import (
+    DummyVecEnv,
+    SubprocVecEnv,
+    VecEnv,
+    VecMonitor,
+    VecNormalize,
+)
 from torch.nn import functional as F
 
 from .landing import (
-    BANK_PATH,
+    LANDING_ENVS,
     REFERENCE_GAMMA,
     REFERENCE_REWARD,
-    MoonLandingEnv,
+    LandingEnv,
     RewardConfig,
     StateBank,
     load_bank,
@@ -50,6 +57,7 @@ class TrainConfig:
 
     name: str = ""
     hypothesis: str = ""
+    task: str = "moon"  # which landing task (orbital_gym.rl.landing.LANDING_ENVS)
     steps: int = 30_000_000
     envs: int = 8
     n_steps: int = 1024
@@ -74,9 +82,11 @@ class TrainConfig:
     min_episodes: int = 150
     probe_episodes: int = 24  # deterministic episodes gating a level advance (0 = noisy gate)
     probe_every: int = 5  # rollouts between probes
+    rule_slack0: float = 0.0  # m/s added to the v1 contact limits at the start (rule curriculum)
+    rule_slack_step: float = 1.0  # m/s taken back per advance, before the level moves
     throttle_map: str = "exp"
     extra_obs: bool = True  # the zero-effort guidance channels
-    window: int = 1800
+    window: int = 0  # steps per episode from orbit entry; 0 = the task's own
     window_slack: int = 400
     cap_mult: float = 1.0
     state_noise: float = 1.0
@@ -231,13 +241,13 @@ class BoundedPPO(PPO):
 
 def make_env(
     cfg: TrainConfig, seed: int, level: float | None = None, **overrides: Any
-) -> Callable[[], MoonLandingEnv]:
+) -> Callable[[], LandingEnv]:
     """A factory for one training env (SubprocVecEnv needs a picklable thunk)."""
     kwargs: dict[str, Any] = dict(
         level=cfg.level0 if level is None else level,
         reward=cfg.reward,
         gamma=cfg.gamma,
-        window=cfg.window,
+        window=cfg.window or None,
         state_noise=cfg.state_noise,
         site_noise=cfg.site_noise,
         seed=seed,
@@ -249,22 +259,20 @@ def make_env(
     )
     kwargs.update(overrides)
 
-    def _thunk() -> MoonLandingEnv:
-        return MoonLandingEnv(BANK_PATH, **kwargs)
+    def _thunk() -> LandingEnv:
+        return LANDING_ENVS[cfg.task](None, **kwargs)
 
     return _thunk
 
 
-def nominal_env(
-    cfg: TrainConfig, render_mode: str | None = None, seed: int = 12345
-) -> MoonLandingEnv:
+def nominal_env(cfg: TrainConfig, render_mode: str | None = None, seed: int = 12345) -> LandingEnv:
     """The evaluation env: every episode starts at parking-orbit entry."""
-    return MoonLandingEnv(
-        BANK_PATH,
+    return LANDING_ENVS[cfg.task](
+        None,
         nominal=True,
         reward=cfg.reward,
         gamma=cfg.gamma,
-        window=cfg.window,
+        window=cfg.window or None,
         state_noise=0.0,
         seed=seed,
         throttle_map=cfg.throttle_map,
@@ -279,13 +287,13 @@ def nominal_env(
 Step = tuple[np.ndarray, float, bool, bool, dict[str, Any]]
 
 
-def step_env(env: MoonLandingEnv, action: np.ndarray) -> Step:
-    """`MoonLandingEnv.step` with its (legacy, untyped) signature pinned."""
+def step_env(env: LandingEnv, action: np.ndarray) -> Step:
+    """`LandingEnv.step` with its (legacy, untyped) signature pinned."""
     out: Step = env.step(action)  # type: ignore[no-untyped-call]
     return out
 
 
-def fly_episode(model: Any, env: MoonLandingEnv, site: float) -> dict[str, Any]:
+def fly_episode(model: Any, env: LandingEnv, site: float) -> dict[str, Any]:
     obs, info = env.reset(options={"site_angle": float(site)})
     done = False
     while not done:
@@ -312,7 +320,7 @@ def summarize(rows: list[dict[str, Any]], prefix_return: float) -> Metrics:
     }
 
 
-def evaluate(model: Any, env: MoonLandingEnv, episodes: int, verbose: bool = True) -> Metrics:
+def evaluate(model: Any, env: LandingEnv, episodes: int, verbose: bool = True) -> Metrics:
     """Deterministic rollouts from parking-orbit entry over an even site grid."""
     sites = np.linspace(-math.pi, math.pi, episodes, endpoint=False)
     rows = [fly_episode(model, env, float(s)) for s in sites]
@@ -374,10 +382,11 @@ class Curriculum(BaseCallback):
     rollout of env steps.
     """
 
-    def __init__(self, cfg: TrainConfig, probe_env: MoonLandingEnv | None, window: int = 200):
+    def __init__(self, cfg: TrainConfig, probe_env: LandingEnv | None, window: int = 200):
         super().__init__()
         self.cfg = cfg
         self.level = cfg.level0
+        self.rule_slack = cfg.rule_slack0
         self.probe_env = probe_env
         self.probe_rate = float("nan")
         self.win = window
@@ -390,6 +399,14 @@ class Curriculum(BaseCallback):
     def _on_training_start(self) -> None:
         self._t0 = time.time()
         self.training_env.env_method("set_level", self.level)
+        self._apply_rule_slack()
+
+    def _apply_rule_slack(self) -> None:
+        if self.cfg.rule_slack0 <= 0.0:
+            return
+        self.training_env.env_method("set_rule_slack", self.rule_slack)
+        if self.probe_env is not None:
+            self.probe_env.set_rule_slack(self.rule_slack)
 
     def _on_step(self) -> bool:
         for info in self.locals["infos"]:
@@ -424,7 +441,7 @@ class Curriculum(BaseCallback):
         if (
             self.at_level >= self.cfg.min_episodes
             and noisy >= 0.5 * self.cfg.threshold
-            and self.level < self.cfg.max_level
+            and (self.level < self.cfg.max_level or self.rule_slack > 0.0)
             and self._rollouts % self.cfg.probe_every == 0
         ):
             self.probe_rate = self._probe()
@@ -432,10 +449,20 @@ class Curriculum(BaseCallback):
         return -1.0  # no fresh probe: never advance on the noisy rate
 
     def _advance(self, rate: float) -> None:
+        """Tighten the touchdown limits first (rule curriculum), then raise
+        the start-state level."""
         self.probe_rate = float("nan")
+        self.at_level = 0
+        if self.rule_slack > 0.0:
+            self.rule_slack = max(0.0, self.rule_slack - self.cfg.rule_slack_step)
+            self._apply_rule_slack()
+            print(
+                f"  [{self.num_timesteps:>11,}] on-site {rate:.0%} -> "
+                f"rule slack {self.rule_slack:.1f} m/s (level {self.level:.2f})"
+            )
+            return
         self.level = min(self.cfg.max_level, self.level + self.cfg.level_step)
         self.training_env.env_method("set_level", self.level)
-        self.at_level = 0
         self.level_history.append((self.num_timesteps, self.level))
         print(f"  [{self.num_timesteps:>11,}] on-site {rate:.0%} -> level {self.level:.2f}")
 
@@ -444,6 +471,7 @@ class Curriculum(BaseCallback):
             f"train/{k}": float(np.mean([r[k] for r in self.recent])) for k in self.recent[0]
         }
         m["train/level"] = self.level
+        m["train/rule_slack"] = self.rule_slack
         m["train/episodes_at_level"] = float(self.at_level)
         if self.probe_rate == self.probe_rate:
             m["train/probe_on_site"] = self.probe_rate
@@ -462,7 +490,7 @@ class Curriculum(BaseCallback):
         if (
             self.at_level >= self.cfg.min_episodes
             and rate >= self.cfg.threshold
-            and self.level < self.cfg.max_level
+            and (self.level < self.cfg.max_level or self.rule_slack > 0.0)
         ):
             self._advance(rate)
         self._log()
@@ -519,7 +547,7 @@ def bc_dataset(bank: StateBank, cfg: TrainConfig) -> tuple[np.ndarray, np.ndarra
         env.env.set_site_angle(e.site)
         env.start_ttl = e.ttl
         env._t = 0
-        env._cap = min(cfg.window, e.ttl + cfg.window_slack)
+        env._cap = min(env.window, e.ttl + cfg.window_slack)
         obs.append(env._obs())
         act.append(env.expert_action(e))
     return np.stack(obs), np.stack(act)
@@ -556,10 +584,71 @@ def bc_pretrain(
 # --- a run -------------------------------------------------------------------------------
 
 
+def widen_policy_params(params: dict[str, th.Tensor], at: int, count: int) -> dict[str, th.Tensor]:
+    """The policy state dict with `count` zero-weight input columns inserted
+    at index `at` of every first layer (SB3 MlpPolicy: the policy and value
+    trunks read the observation directly)."""
+    assert count > 0 and at >= 0
+    out = dict(params)
+    for key in ("mlp_extractor.policy_net.0.weight", "mlp_extractor.value_net.0.weight"):
+        w = params[key]
+        assert at <= w.shape[1], (key, at, tuple(w.shape))
+        pad = th.zeros(w.shape[0], count, dtype=w.dtype, device=w.device)
+        out[key] = th.cat([w[:, :at], pad, w[:, at:]], dim=1)
+    return out
+
+
 def load_model(path: str) -> PPO:
     """A saved policy for evaluation (observation normalisation is off in the
     recipe, so the saved reward statistics are not needed to fly it)."""
     return PPO.load(path, device="cpu")
+
+
+def widened_model(cfg: TrainConfig, algo: type[PPO], ckpt: PPO, vec: VecEnv) -> PPO:
+    """A fresh model on the new observation space carrying the checkpoint's
+    weights, with the task's new channels wired at zero weight so the
+    policy starts out flying exactly as before. The new channels are
+    the ones the mission appends to its observation, which sit right
+    before the wrapper's own tail (time left, guidance)."""
+    old_shape, new_shape = ckpt.observation_space.shape, vec.observation_space.shape
+    assert old_shape is not None and new_shape is not None
+    old_n, new_n = int(old_shape[0]), int(new_shape[0])
+    tail = 1 + (LandingEnv.N_EXTRA if cfg.extra_obs else 0)
+    params = widen_policy_params(ckpt.get_parameters()["policy"], old_n - tail, new_n - old_n)
+    model = fresh_model(cfg, algo, vec)
+    loaded: dict[str, Any] = {"policy": params}
+    model.set_parameters(loaded, exact_match=False)
+    print(
+        f"      widened the policy from {old_n} to {new_n} inputs "
+        f"({new_n - old_n} new channels at index {old_n - tail}, zero weights; fresh optimizer)"
+    )
+    return model
+
+
+def fresh_model(cfg: TrainConfig, algo: type[PPO], vec: VecEnv) -> PPO:
+    model = algo(
+        "MlpPolicy",
+        vec,
+        learning_rate=cfg.lr,
+        n_steps=cfg.n_steps,
+        batch_size=cfg.batch_size,
+        n_epochs=cfg.epochs,
+        gamma=cfg.gamma,
+        gae_lambda=cfg.gae_lambda,
+        clip_range=cfg.clip,
+        ent_coef=cfg.ent_coef,
+        vf_coef=cfg.vf_coef,
+        max_grad_norm=cfg.max_grad_norm,
+        policy_kwargs=dict(
+            net_arch=dict(pi=list(cfg.net), vf=list(cfg.net)), log_std_init=cfg.log_std_init
+        ),
+        seed=cfg.seed,
+        device="cpu",
+        verbose=0,
+        use_sde=cfg.sde,
+        sde_sample_freq=cfg.sde_freq if cfg.sde else -1,
+    )
+    return model
 
 
 class TrainingRun:
@@ -571,7 +660,8 @@ class TrainingRun:
         self.explog = explog
         self.name = cfg.name or time.strftime("ppo_%Y%m%d_%H%M%S")
         self.out_dir = os.path.join("models", self.name)
-        self.bank: StateBank = load_bank()
+        task = LANDING_ENVS[cfg.task].TASK
+        self.bank: StateBank = load_bank(task.bank_path, task)
 
     # -- building -------------------------------------------------------------------------
 
@@ -593,37 +683,25 @@ class TrainingRun:
             base = cfg.resume[:-4] if cfg.resume.endswith(".zip") else cfg.resume
             stats = base + "_vecnorm.pkl"
             if os.path.exists(stats):
-                vec = VecNormalize.load(stats, vec.venv)
+                # the return statistics carry over; the observation statistics
+                # only when the observation space is the same (and in use)
+                with open(stats, "rb") as f:
+                    saved = pickle.load(f)
+                vec.ret_rms = saved.ret_rms
+                if vec.norm_obs and saved.observation_space.shape == vec.observation_space.shape:
+                    vec.obs_rms = saved.obs_rms
                 vec.training = True
                 print(f"      restored reward-normalisation stats from {stats}")
-            model = algo.load(cfg.resume, env=vec, device="cpu", learning_rate=cfg.lr)
+            ckpt = algo.load(cfg.resume, device="cpu")
+            if ckpt.observation_space.shape != vec.observation_space.shape:
+                model = widened_model(cfg, algo, ckpt, vec)
+            else:
+                model = algo.load(cfg.resume, env=vec, device="cpu", learning_rate=cfg.lr)
             if cfg.bound_coef > 0.0:
                 with th.no_grad():
                     model.policy.log_std.data.clamp_(min=math.log(BoundedPPO.std_floor))
             return model, vec
-        model = algo(
-            "MlpPolicy",
-            vec,
-            learning_rate=cfg.lr,
-            n_steps=cfg.n_steps,
-            batch_size=cfg.batch_size,
-            n_epochs=cfg.epochs,
-            gamma=cfg.gamma,
-            gae_lambda=cfg.gae_lambda,
-            clip_range=cfg.clip,
-            ent_coef=cfg.ent_coef,
-            vf_coef=cfg.vf_coef,
-            max_grad_norm=cfg.max_grad_norm,
-            policy_kwargs=dict(
-                net_arch=dict(pi=list(cfg.net), vf=list(cfg.net)), log_std_init=cfg.log_std_init
-            ),
-            seed=cfg.seed,
-            device="cpu",
-            verbose=0,
-            use_sde=cfg.sde,
-            sde_sample_freq=cfg.sde_freq if cfg.sde else -1,
-        )
-        return model, vec
+        return fresh_model(cfg, algo, vec), vec
 
     def _warm_start(self, model: PPO) -> None:
         cfg = self.cfg
@@ -652,9 +730,7 @@ class TrainingRun:
             "descent_len": self.bank.descent_len,
             "max_ttl": self.bank.max_ttl,
         }
-        self.explog.start(
-            self.name, params, cfg.hypothesis, tags={"algo": "PPO", "task": "orbit->site"}
-        )
+        self.explog.start(self.name, params, cfg.hypothesis, tags={"algo": "PPO", "task": cfg.task})
         print("[2/3] building vec env + PPO")
         model, vec = self._model(self._vec_env())
         self._warm_start(model)
@@ -710,6 +786,11 @@ class TrainingRun:
 
 
 def evaluate_checkpoint(cfg: TrainConfig, path: str, episodes: int, watch: bool = False) -> Metrics:
-    """Fly a saved policy from parking-orbit entry over a site grid."""
+    """Fly a saved policy from parking-orbit entry over a site grid. A
+    checkpoint from a task with fewer observation channels is widened with
+    zero weights for the new ones (what a resume starts from)."""
     env = nominal_env(cfg, render_mode="human" if watch else None)
-    return evaluate(load_model(path), env, episodes)
+    model = load_model(path)
+    if model.observation_space.shape != env.observation_space.shape:
+        model = widened_model(cfg, PPO, model, DummyVecEnv([lambda: env]))
+    return evaluate(model, env, episodes)

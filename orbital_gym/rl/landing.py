@@ -364,6 +364,19 @@ class LandingEnv(gym.Env):
     def set_level(self, level: float) -> None:
         self.level = float(min(1.0, max(0.0, level)))
 
+    def set_rule_slack(self, slack: float) -> None:
+        """Loosen the task's touchdown limits by `slack` m/s (vertical and
+        horizontal) for training: a rule curriculum. No-op for a task
+        without landing legs. The task's own rules are `TASK`'s env's."""
+        base = getattr(self.task.make_env(), "touchdown", None)
+        if base is None:
+            return
+        self.env.touchdown = replace(
+            base,
+            max_vertical=base.max_vertical + slack,
+            max_horizontal=base.max_horizontal + slack,
+        )
+
     def _ttl_cap(self) -> int:
         """How far before touchdown an episode may start, at this level.
         0 -> 15 steps (final metres); 0.5 -> the powered descent up to the
@@ -695,3 +708,11 @@ class MoonLandingFromOrbitV1(FromOrbit):
     """`MoonLandingFromOrbit-v1`."""
 
     TASK = MOON_V1_TASK
+
+
+# the trainable tasks by name (TrainConfig.task, fly_moon_policy --task)
+LANDING_ENVS: dict[str, type[LandingEnv]] = {
+    "moon": MoonLandingEnv,
+    "moon-v1": MoonV1LandingEnv,
+    "mars": MarsLandingEnv,
+}

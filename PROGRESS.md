@@ -112,9 +112,12 @@ tests for new behaviour, PR merged, this file updated.
   hold, the reset on lift-off and the engine-on restart, the channels, v0
   untouched and the orbit-first pilot landing on the legs (7/8 on site in
   the benchmark). Depends on A3, B1.
-- [ ] **C2 Fine-tune the lander under v1.** Resume the v15 checkpoint on
-  v1, log the run, report the 48-site result. Done: entry in
-  `EXPERIMENTS.md` with the number. Depends on C1, A6.
+- [x] **C2 Fine-tune the lander under v1.** Runs `ppo-v1-legs-ft1` (no
+  success: the v0 touchdown speed sits over the 5 m/s limit) and
+  `ppo-v1-legs-ft2` (rule curriculum: contact limits start 8 m/s loose and
+  tighten as the probe clears 80%). Result of ft2's best checkpoint on the
+  full mission from the pad, 48 sites: .
+  Entries in `EXPERIMENTS.md`. Depends on C1, A6.
 
 ### D. Publishing
 

@@ -10,6 +10,7 @@ environment scores it, not the training reward.
     python scripts/fly_moon_policy.py models/<run>/best.zip --site 45 --render
     python scripts/fly_moon_policy.py models/<run>/best.zip --site 45 --video landing.mp4
     python scripts/fly_moon_policy.py models/<run>/best.zip --site 45 --video landing.gif
+    python scripts/fly_moon_policy.py models/<run>/best.zip --task moon-v1     # the v1 rules
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from stable_baselines3 import PPO
 
-from orbital_gym.rl.landing import MoonLandingEnv, load_bank
+from orbital_gym.rl.landing import LANDING_ENVS, load_bank
 
 
 def fly(
@@ -36,9 +37,11 @@ def fly(
     render: bool = False,
     video: str | None = None,
     every: int = 4,
+    task: str = "moon",
 ):
-    bank = load_bank(verbose=False)
-    env = MoonLandingEnv(
+    env_cls = LANDING_ENVS[task]
+    bank = load_bank(env_cls.TASK.bank_path, env_cls.TASK, verbose=False)
+    env = env_cls(
         bank,
         nominal=True,
         state_noise=0.0,
@@ -116,6 +119,7 @@ def main():
     ap.add_argument("--no-extra-obs", action="store_true")
     ap.add_argument("--throttle-map", default="exp")
     ap.add_argument("--render", action="store_true")
+    ap.add_argument("--task", default="moon", choices=sorted(LANDING_ENVS), help="the landing task")
     ap.add_argument(
         "--video", "--gif", default=None, help="record a single-site flight (.mp4, .gif, ...)"
     )
@@ -135,6 +139,7 @@ def main():
             args.throttle_map,
             args.render,
             args.video if len(sites) == 1 else None,
+            task=args.task,
         )
         rows.append(r)
         print(
