@@ -3,7 +3,7 @@
 ## Status (2026-11-12)
 
 Phase 1 merged (PR #1); repository public with branch protection. Phase 2
-in progress: A1-A6 done. Four missions exist and are solved by scripted pilots;
+in progress: A1-A7 done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -55,9 +55,12 @@ tests for new behaviour, PR merged, this file updated.
   `python scripts/train_moon_rl.py --name x --hypothesis y` is the v15
   setup (`tests/test_trainer.py`); the file left the complexity and typing
   baselines; `--eval 8` on `best_100pct.zip` still lands 8/8. Depends on A5.
-- [ ] **A7 HUD frame fix.** The `vr`/`vt` rows show body-relative values
-  when inside a secondary body's SOI. Done: a render test asserts the HUD
-  reads the moon-relative numbers after a moon landing. Depends on A3.
+- [x] **A7 HUD frame fix.** `Renderer._headline(body)` gives the HUD's
+  altitude, speed, `vr` and `vt` in the frame of the body whose sphere of
+  influence the rocket is in (`CelestialBody.radial_tangential`), the
+  planet's otherwise. Done: `tests/test_rendering.py` flies a moon landing
+  and asserts the moon-relative numbers against the env's planet-frame
+  ones. Depends on A3.
 
 ### B. The practice ladder
 
@@ -141,4 +144,4 @@ hold; background training runs allowed; tasks strictly in listed order.
 
 ## Next steps
 
-1. A7 (HUD frame fix), then B1 onward in order.
+1. B1 (`MoonLandingFromOrbit-v0`), then B2 onward in order.

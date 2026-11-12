@@ -1,5 +1,6 @@
 """The headless renderer draws every mission, including the body-relative
-views (moon sphere of influence, star-system view, landed on Mars)."""
+views (moon sphere of influence, star-system view, landed on Mars), and its
+HUD reads the numbers in the frame of the body the rocket is bound to."""
 
 from __future__ import annotations
 
@@ -63,3 +64,21 @@ def test_mars_mission_renders_the_system_view_and_the_target() -> None:
     info = _fly_to(env, pilot, lambda i: i["soi"] == "mars")
     assert info["soi"] == "mars"
     _frame(env, settle=30)  # Mars-centred
+
+
+def test_hud_reads_moon_relative_numbers_after_a_moon_landing() -> None:
+    env = ToMoonEnv(render_mode="rgb_array")
+    env.reset(options={"site_angle": 0.0})
+    info = _fly_to(env, MoonAutopilot(env), lambda i: False)  # until the episode ends
+    assert info["termination"].startswith("landed_moon")
+    _frame(env)
+    u: Any = env.unwrapped
+    head = u._renderer._headline(u.target_body)
+    # touched down on the moon: the moon-frame numbers are the (soft) impact
+    # velocity, the planet-frame ones (the env's own info) still carry the
+    # moon's orbital speed
+    assert abs(head["vr"]) < 20.0 and abs(head["vt"]) < 20.0 and head["speed"] < 20.0
+    assert abs(head["alt_km"]) < 0.05
+    assert info["speed"] > 500.0 and math.hypot(info["vr"], info["vt"]) > 500.0
+    # the headline frame is the one the renderer's SOI lookup picked
+    assert u._renderer._soi()[0] == "moon"

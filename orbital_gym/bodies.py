@@ -176,6 +176,17 @@ class CelestialBody:
         _, _, wx, wy = self.relative(rx, ry, vx, vy, t)
         return math.hypot(wx, wy)
 
+    def radial_tangential(
+        self, rx: float, ry: float, vx: float, vy: float, t: float
+    ) -> tuple[float, float]:
+        """Body-relative velocity split into (radial, tangential) in the
+        rocket's local frame about this body, with the mission envs'
+        convention: radial is up, tangential is clockwise-positive."""
+        px, py, wx, wy = self.relative(rx, ry, vx, vy, t)
+        d = max(1.0, math.hypot(px, py))
+        ux, uy = px / d, py / d
+        return wx * ux + wy * uy, wx * uy - wy * ux
+
     def elements(
         self, rx: float, ry: float, vx: float, vy: float, t: float
     ) -> tuple[float, float, float, float]:

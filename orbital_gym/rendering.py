@@ -562,6 +562,29 @@ class Renderer:
         p.fill((10, 13, 24, alpha))
         return p
 
+    def _headline(self, body) -> dict[str, float]:
+        """The HUD's altitude, speed, vr and vt. Inside a secondary body's
+        sphere of influence they are body-relative, matching the frame the
+        info elements switched to; between bodies (ToMars) heliocentric,
+        with the distance to the star in the altitude slot; otherwise the
+        env's own planet-frame numbers."""
+        env = self.env
+        if body is None:
+            info = env._info()
+            return {
+                "alt_km": info["altitude"] / 1000,
+                "speed": info["speed"],
+                "vr": info["vr"],
+                "vt": info["vt"],
+            }
+        args = (env._rx, env._ry, env._vx, env._vy, env._time)
+        vr, vt = body.radial_tangential(*args)
+        if body.kind == "star":
+            alt = body.distance(env._rx, env._ry, env._time)
+        else:
+            alt = body.altitude(env._rx, env._ry, env._time)
+        return {"alt_km": alt / 1000, "speed": body.relative_speed(*args), "vr": vr, "vt": vt}
+
     def _draw_hud(self):
         pg = self.pg
         env = self.env
@@ -569,28 +592,17 @@ class Renderer:
 
         panel = self._panel(258, 168)
         self.surf.blit(panel, (10, 10))
-        # inside a secondary body's SOI the headline numbers go body-relative,
-        # matching the frame the info elements switched to; between bodies
-        # (ToMars) they go heliocentric
         soi_name, _bx, _by, _mu, _r, body = self._soi()
         in_moon = body is not None and body.kind != "star"
         in_sun = body is not None and body.kind == "star"
-        if body is not None and in_moon:
-            alt_km = body.altitude(env._rx, env._ry, env._time) / 1000
-            speed = body.relative_speed(env._rx, env._ry, env._vx, env._vy, env._time)
-        elif body is not None:
-            alt_km = body.distance(env._rx, env._ry, env._time) / 1000
-            speed = body.relative_speed(env._rx, env._ry, env._vx, env._vy, env._time)
-        else:
-            alt_km = info["altitude"] / 1000
-            speed = info["speed"]
-        self.surf.blit(self.font_big.render(f"{alt_km:8.1f} km", True, TEXT), (24, 20))
-        self.surf.blit(self.font_big.render(f"{speed:6.0f} m/s", True, TEXT), (24, 52))
+        head = self._headline(body)
+        self.surf.blit(self.font_big.render(f"{head['alt_km']:8.1f} km", True, TEXT), (24, 20))
+        self.surf.blit(self.font_big.render(f"{head['speed']:6.0f} m/s", True, TEXT), (24, 52))
         apo = info["apoapsis"]
         apo_s = "--" if not math.isfinite(apo) else f"{apo / 1000:.1f}"
         peri_s = "--" if info["periapsis"] < 0 else f"{info['periapsis'] / 1000:.1f}"
         rows = [
-            (f"vr {info['vr']:+7.0f}", f"vt {info['vt']:+7.0f}"),
+            (f"vr {head['vr']:+7.0f}", f"vt {head['vt']:+7.0f}"),
             (f"Ap {apo_s:>8}", f"Pe {peri_s:>8}"),
             (f"dv {info['dv_remaining']:6.0f}", f"t  {info['time']:6.0f} s"),
             (
