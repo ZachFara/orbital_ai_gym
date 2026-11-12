@@ -35,6 +35,7 @@ import math
 import os
 import pickle
 from dataclasses import dataclass, field
+from typing import Any, ClassVar
 
 import gymnasium as gym
 import numpy as np
@@ -43,11 +44,14 @@ from gymnasium import spaces
 from ..missions.to_moon import ToMoonEnv
 from ..missions.to_orbit import _wrap_pi
 
-ENV_MAX_STEPS = 12_000     # same horizon as the orbit-first expert flights
+ENV_MAX_STEPS = 12_000  # same horizon as the orbit-first expert flights
 SNAP_SKIP = ("_renderer",)
 POST_CAPTURE = ("moon_orbit", "deorbit", "pdescend")
-BANK_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "cache", "moon_bank.pkl")
+BANK_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "cache",
+    "moon_bank.pkl",
+)
 
 
 def snapshot(env: ToMoonEnv) -> dict:
@@ -70,9 +74,9 @@ def restore(env: ToMoonEnv, snap: dict) -> None:
 @dataclass
 class BankEntry:
     snap: dict
-    ttl: int          # expert steps from this state to touchdown
-    site: float       # site the expert was flying to
-    mode: str         # expert mode at this state
+    ttl: int  # expert steps from this state to touchdown
+    site: float  # site the expert was flying to
+    mode: str  # expert mode at this state
     touch: float = 0.0  # body-frame bearing where that flight actually touched down
     act: object = None  # the expert's env-frame action at this state
 
@@ -81,10 +85,10 @@ class BankEntry:
 class StateBank:
     entries: list = field(default_factory=list)
     prefix_actions: list = field(default_factory=list)  # launch -> orbit entry
-    prefix_return: float = 0.0                         # native return of the prefix
-    handoff: int = 0                                   # step index of orbit entry
-    orbit_entry: dict | None = None                    # snapshot at the handoff
-    descent_len: int = 0                               # longest deorbit->touchdown
+    prefix_return: float = 0.0  # native return of the prefix
+    handoff: int = 0  # step index of orbit entry
+    orbit_entry: dict | None = None  # snapshot at the handoff
+    descent_len: int = 0  # longest deorbit->touchdown
     max_ttl: int = 0
 
     def by_ttl(self):
@@ -126,8 +130,10 @@ def build_bank(n_sites: int = 24, coast_stride: int = 3, verbose: bool = True) -
                 break
         # the expert is soft for every site but misses a few by more than the
         # 8 km site radius; those flights still supply reachable states
-        assert info["termination"] in ("landed_moon", "landed_moon_site"), \
-            (site, info["termination"])
+        assert info["termination"] in ("landed_moon", "landed_moon_site"), (
+            site,
+            info["termination"],
+        )
         assert handoff == bank.handoff, "orbit entry must be site-independent"
         n = len(snaps)
         # where this flight really came down (body frame): the expert lands
@@ -145,10 +151,12 @@ def build_bank(n_sites: int = 24, coast_stride: int = 3, verbose: bool = True) -
             bank.entries.append(BankEntry(s, ttl, float(site), mode, touch, a))
             bank.max_ttl = max(bank.max_ttl, ttl)
         if verbose:
-            print(f"  bank site {k + 1}/{n_sites} ({math.degrees(site):+6.1f} deg): "
-                  f"{n} from-orbit steps, descent {n - first_deorbit}, "
-                  f"touchdown {info['moon_rel_speed']:.1f} m/s, "
-                  f"{info['moon_site_distance'] / 1000:.1f} km off")
+            print(
+                f"  bank site {k + 1}/{n_sites} ({math.degrees(site):+6.1f} deg): "
+                f"{n} from-orbit steps, descent {n - first_deorbit}, "
+                f"touchdown {info['moon_rel_speed']:.1f} m/s, "
+                f"{info['moon_site_distance'] / 1000:.1f} km off"
+            )
         env.close()
     return bank
 
@@ -165,6 +173,7 @@ def load_bank(path: str = BANK_PATH, **kw) -> StateBank:
 
 
 # --- zero-effort guidance quantities ------------------------------------------
+
 
 def conic_impact(mu: float, R: float, px: float, py: float, wx: float, wy: float):
     """Coast the moon-relative state along its two-body conic to the surface.
@@ -197,12 +206,12 @@ def conic_impact(mu: float, R: float, px: float, py: float, wx: float, wy: float
     reaches = cos_fi <= 1.0
     if reaches:
         fi = math.acos(max(-1.0, min(1.0, cos_fi)))
-        ft = -fi                       # descending crossing of r = R
-        if e >= 1.0 and f0 > ft:       # hyperbolic and already past it: outbound
+        ft = -fi  # descending crossing of r = R
+        if e >= 1.0 and f0 > ft:  # hyperbolic and already past it: outbound
             return False, math.inf, math.sqrt(v2), 0.0, math.sqrt(v2)
         r_t = R
     else:
-        ft = 0.0                       # next periapsis
+        ft = 0.0  # next periapsis
         if e >= 1.0 and rv > 0.0:
             return False, math.inf, math.sqrt(v2), 0.0, math.sqrt(v2)
         r_t = pp / (1.0 + e)
@@ -211,9 +220,11 @@ def conic_impact(mu: float, R: float, px: float, py: float, wx: float, wy: float
         n = math.sqrt(mu / (a * a * a))
 
         def mean_anom(f):
-            E = 2.0 * math.atan2(math.sqrt(1.0 - e) * math.sin(f / 2.0),
-                                 math.sqrt(1.0 + e) * math.cos(f / 2.0))
+            E = 2.0 * math.atan2(
+                math.sqrt(1.0 - e) * math.sin(f / 2.0), math.sqrt(1.0 + e) * math.cos(f / 2.0)
+            )
             return E - e * math.sin(E)
+
         dt = ((mean_anom(ft) - mean_anom(f0)) % TWO_PI_) / n
     else:
         a = pp / (e * e - 1.0)
@@ -224,6 +235,7 @@ def conic_impact(mu: float, R: float, px: float, py: float, wx: float, wy: float
             t = max(-0.999999, min(0.999999, t))
             H = 2.0 * math.atanh(t)
             return e * math.sinh(H) - H
+
         dt = max(0.0, (mean_anom(ft) - mean_anom(f0)) / n)
     vimp = math.sqrt(max(0.0, v2 + 2.0 * mu * (1.0 / r_t - 1.0 / r)))
     vt = h / r_t
@@ -236,52 +248,63 @@ TWO_PI_ = 2.0 * math.pi
 
 # --- reward -------------------------------------------------------------------
 
+
 @dataclass
 class RewardConfig:
-    w_dist: float = 2.0        # potential weight on site distance
-    d_scale: float = 400_000.0 # m; ~orbit-to-far-side distance
-    w_speed: float = 1.0       # potential weight on moon-relative speed
-    v_scale: float = 1_100.0   # m/s; ~parking-orbit speed
-    w_miss: float = 0.0        # potential weight on the predicted (zero-effort) miss
+    w_dist: float = 2.0  # potential weight on site distance
+    d_scale: float = 400_000.0  # m; ~orbit-to-far-side distance
+    w_speed: float = 1.0  # potential weight on moon-relative speed
+    v_scale: float = 1_100.0  # m/s; ~parking-orbit speed
+    w_miss: float = 0.0  # potential weight on the predicted (zero-effort) miss
     miss_scale: float = 20_000.0  # m; the site-distance potential is dominated by
-                                  # altitude during a descent, so lateral error gets
-                                  # almost no gradient without this term (v4: policy
-                                  # used a prior on the site's usual place instead
-                                  # of reading the gauge)
-    miss_cap: float = 500_000.0   # m; the value used while the coasting path does not
-                                  # reach the surface (periapsis-based "miss" is +-450 km
-                                  # garbage in a near-circular orbit; a constant there
-                                  # makes the first retro impulses reward-neutral, not a dip)
-    on_site: float = 10.0      # soft touchdown within the site radius
-    soft_base: float = 1.0     # soft touchdown anywhere...
-    soft_near: float = 4.0     # ...plus this * exp(-miss / soft_scale)
+    # altitude during a descent, so lateral error gets
+    # almost no gradient without this term (v4: policy
+    # used a prior on the site's usual place instead
+    # of reading the gauge)
+    miss_cap: float = 500_000.0  # m; the value used while the coasting path does not
+    # reach the surface (periapsis-based "miss" is +-450 km
+    # garbage in a near-circular orbit; a constant there
+    # makes the first retro impulses reward-neutral, not a dip)
+    on_site: float = 10.0  # soft touchdown within the site radius
+    soft_base: float = 1.0  # soft touchdown anywhere...
+    soft_near: float = 4.0  # ...plus this * exp(-miss / soft_scale)
     soft_scale: float = 20_000.0
-    crash_min: float = 4.0     # crash penalty at zero impact speed
-    crash_max: float = 10.0    # crash penalty at >= crash_v_ref
+    crash_min: float = 4.0  # crash penalty at zero impact speed
+    crash_max: float = 10.0  # crash penalty at >= crash_v_ref
     crash_v_ref: float = 300.0
-    fail: float = 10.0         # escape / window limit / time limit
-    fuel: float = 0.0          # per m/s of delta-v spent
-    hover_alt: float = 500.0   # m; below this altitude every step costs...
-    hover_cost: float = 0.0    # ...this much (gamma 0.9995 makes dithering at the
-                               # surface nearly free: v9's mean policy hovered at
-                               # 2-5 m for 30-150 s shaving a miss already inside
-                               # the site radius, and drifted off-site doing it)
+    fail: float = 10.0  # escape / window limit / time limit
+    fuel: float = 0.0  # per m/s of delta-v spent
+    hover_alt: float = 500.0  # m; below this altitude every step costs...
+    hover_cost: float = 0.0  # ...this much (gamma 0.9995 makes dithering at the
+    # surface nearly free: v9's mean policy hovered at
+    # 2-5 m for 30-150 s shaving a miss already inside
+    # the site radius, and drifted off-site doing it)
 
 
 class MoonLandingEnv(gym.Env):
     """Parking orbit -> soft touchdown on a random site. See module docstring."""
 
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
+    metadata: ClassVar[dict[str, Any]] = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
     N_EXTRA = 8  # zero-effort guidance channels, see _guidance_obs
 
-    def __init__(self, bank: StateBank | str = BANK_PATH, level: float = 0.0,
-                 reward: RewardConfig | None = None, gamma: float = 0.995,
-                 window: int = 1_800, window_slack: int = 400, cap_mult: float = 1.0,
-                 state_noise: float = 1.0, site_noise: float = 1.0,
-                 site_sigma_max: float = 0.04,
-                 nominal: bool = False, throttle_map: str = "lin",
-                 extra_obs: bool = False,
-                 render_mode: str | None = None, seed: int | None = None):
+    def __init__(
+        self,
+        bank: StateBank | str = BANK_PATH,
+        level: float = 0.0,
+        reward: RewardConfig | None = None,
+        gamma: float = 0.995,
+        window: int = 1_800,
+        window_slack: int = 400,
+        cap_mult: float = 1.0,
+        state_noise: float = 1.0,
+        site_noise: float = 1.0,
+        site_sigma_max: float = 0.04,
+        nominal: bool = False,
+        throttle_map: str = "lin",
+        extra_obs: bool = False,
+        render_mode: str | None = None,
+        seed: int | None = None,
+    ):
         super().__init__()
         self.bank = load_bank(bank) if isinstance(bank, str) else bank
         self.level = float(level)
@@ -298,12 +321,13 @@ class MoonLandingEnv(gym.Env):
         # manoeuvre the real from-orbit task never requires (measured, v5:
         # 0-9% on-site for those vs 81-94% upstream). 0.04 rad = 6.4 km.
         self.site_sigma_max = site_sigma_max
-        self.nominal = nominal   # eval mode: orbit-entry state, no noise
+        self.nominal = nominal  # eval mode: orbit-entry state, no noise
         self.throttle_map = throttle_map
         self.extra_obs = extra_obs
         self.render_mode = render_mode
-        self.env = ToMoonEnv(max_episode_steps=ENV_MAX_STEPS, hover_control=True,
-                             render_mode=render_mode)
+        self.env = ToMoonEnv(
+            max_episode_steps=ENV_MAX_STEPS, hover_control=True, render_mode=render_mode
+        )
         self._rng = np.random.default_rng(seed)
         self.action_space = spaces.Box(-1.0, 1.0, (3,), np.float32)
         n = self.env.observation_space.shape[0] + 1 + (self.N_EXTRA if extra_obs else 0)
@@ -330,10 +354,10 @@ class MoonLandingEnv(gym.Env):
         d, T = self.bank.descent_len, self.bank.max_ttl
         d0, d1 = d - 30, d + 40
         if lam <= 0.5:
-            return int(round(15 + (d0 - 15) * (lam / 0.5) ** 1.5))
+            return round(15 + (d0 - 15) * (lam / 0.5) ** 1.5)
         if lam <= 0.65:
-            return int(round(d0 + (d1 - d0) * (lam - 0.5) / 0.15))
-        return int(round(d1 + (T - d1) * (lam - 0.65) / 0.35))
+            return round(d0 + (d1 - d0) * (lam - 0.5) / 0.15)
+        return round(d1 + (T - d1) * (lam - 0.65) / 0.35)
 
     def _sample_entry(self) -> BankEntry:
         by_ttl, ttls = self.bank.by_ttl()
@@ -383,16 +407,15 @@ class MoonLandingEnv(gym.Env):
     def _perturb(self, lam: float) -> None:
         u = self.env
         mx, my = u._moon_world()
-        mvx, mvy = u._moon_velocity()
+        _mvx, _mvy = u._moon_velocity()
         px, py = u._rx - mx, u._ry - my
         d = math.hypot(px, py)
         malt = d - u.moon.radius
-        sv = self.state_noise * (0.5 + 15.0 * lam)          # m/s
+        sv = self.state_noise * (0.5 + 15.0 * lam)  # m/s
         sp = self.state_noise * (0.02 * malt + 5.0 + 500.0 * lam)  # m
         u._vx += self._rng.normal(0.0, sv)
         u._vy += self._rng.normal(0.0, sv)
         # radial: keep clear of the ground; tangential: slide along the surface
-        ux, uy = px / d, py / d
         dr = self._rng.normal(0.0, 0.3 * sp)
         dt = self._rng.normal(0.0, sp)
         new_alt = max(20.0, malt + dr)
@@ -424,8 +447,11 @@ class MoonLandingEnv(gym.Env):
         # re-randomised site may need a full orbit (~1300 steps) of waiting
         # first, so it gets the whole window (v8 capped those at ttl+400 and
         # taught "a far site is a guaranteed timeout")
-        self._cap = self.window if (self.nominal or self._start_in_orbit) else \
-            min(self.window, int(self.cap_mult * self.start_ttl) + self.window_slack)
+        self._cap = (
+            self.window
+            if (self.nominal or self._start_in_orbit)
+            else min(self.window, int(self.cap_mult * self.start_ttl) + self.window_slack)
+        )
         self._phi = self._potential()
         self._dv0 = u._dv_used
         return self._obs(), self._info(u._info(), 0.0)
@@ -456,7 +482,7 @@ class MoonLandingEnv(gym.Env):
         theta_s = u._moon_angle() + u._site_angle
         w_m = TWO_PI_ / u.moon.orbit_period
         h = px * wy - py * wx
-        v_t = h / d                                   # CCW tangential speed
+        v_t = h / d  # CCW tangential speed
         a_h = 0.9 * u.rocket.stages[u._stage].thrust / u._mass
         g_m = mu / (d * d)
         t_b = abs(v_t) / max(1.0, a_h)
@@ -476,8 +502,7 @@ class MoonLandingEnv(gym.Env):
         u, rc = self.env, self.rc
         mvx, mvy = u._moon_velocity()
         v = math.hypot(u._vx - mvx, u._vy - mvy)
-        phi = -rc.w_dist * u._moon_site_distance() / rc.d_scale \
-            - rc.w_speed * v / rc.v_scale
+        phi = -rc.w_dist * u._moon_site_distance() / rc.d_scale - rc.w_speed * v / rc.v_scale
         if rc.w_miss > 0.0 and u._in_moon_soi():
             m, _ = self._zem()
             # asinh: ~linear inside miss_scale/4, logarithmic beyond, so the
@@ -495,7 +520,7 @@ class MoonLandingEnv(gym.Env):
         px, py = u._rx - mx, u._ry - my
         d = max(1.0, math.hypot(px, py))
         ux, uy = px / d, py / d
-        return (ux, uy), (uy, -ux)   # up, east (matches the obs convention)
+        return (ux, uy), (uy, -ux)  # up, east (matches the obs convention)
 
     def _throttle_a0(self, a0: float) -> float:
         """Policy throttle channel -> the env's hover-relative a0.
@@ -511,15 +536,12 @@ class MoonLandingEnv(gym.Env):
             return float(a0)
         u = self.env
         hover = max(1e-4, u.hover_throttle())
-        if a0 <= 0.0:
-            t = hover * (1.0 + a0)
-        else:
-            t = hover + (1.0 - hover) * a0 * a0
+        t = hover * (1.0 + a0) if a0 <= 0.0 else hover + (1.0 - hover) * a0 * a0
         if t < 0.02 * hover:
             return -1.0  # engine-off deadzone
         return float(np.clip(math.log(t / hover) / u.HOVER_K, -1.0, 1.0))
 
-    def expert_action(self, entry: "BankEntry") -> np.ndarray:
+    def expert_action(self, entry: BankEntry) -> np.ndarray:
         """The expert's action at a bank state, expressed in THIS wrapper's
         action space (moon frame, chosen throttle map). The env must currently
         hold that state (call right after restore)."""
@@ -536,8 +558,10 @@ class MoonLandingEnv(gym.Env):
         pu_x, pu_y, pe_x, pe_y = u._local_frame()
         wx, wy = a[1] * pu_x + a[2] * pe_x, a[1] * pu_y + a[2] * pe_y
         up, east = self._moon_frame()
-        return np.array([np.clip(a0, -1, 1), wx * up[0] + wy * up[1],
-                         wx * east[0] + wy * east[1]], dtype=np.float32)
+        return np.array(
+            [np.clip(a0, -1, 1), wx * up[0] + wy * up[1], wx * east[0] + wy * east[1]],
+            dtype=np.float32,
+        )
 
     def _env_action(self, action) -> np.ndarray:
         a = np.asarray(action, dtype=np.float64).flatten()
@@ -546,8 +570,7 @@ class MoonLandingEnv(gym.Env):
         wx = a[1] * up[0] + a[2] * east[0]
         wy = a[1] * up[1] + a[2] * east[1]
         pu, pe = self.env._local_frame()[0:2], self.env._local_frame()[2:4]
-        return np.array([a[0], wx * pu[0] + wy * pu[1], wx * pe[0] + wy * pe[1]],
-                        dtype=np.float32)
+        return np.array([a[0], wx * pu[0] + wy * pu[1], wx * pe[0] + wy * pe[1]], dtype=np.float32)
 
     def step(self, action):
         u, rc = self.env, self.rc
@@ -568,8 +591,7 @@ class MoonLandingEnv(gym.Env):
         reward = phi_new - self._phi
         self._phi = phi_new
         reward -= rc.fuel * (u._dv_used - dv_before)
-        if rc.hover_cost > 0.0 and not done and \
-                u._moon_distance() - u.moon.radius < rc.hover_alt:
+        if rc.hover_cost > 0.0 and not done and u._moon_distance() - u.moon.radius < rc.hover_alt:
             reward -= rc.hover_cost
         miss = info["moon_site_distance"]
         if term == "landed_moon_site":
@@ -597,25 +619,28 @@ class MoonLandingEnv(gym.Env):
         wx, wy = u._vx - mvx, u._vy - mvy
         R, mu = u.moon.radius, u.moon.mu
         reaches, dt, vimp, vr_i, vt_i = conic_impact(mu, R, px, py, wx, wy)
-        m_signed, _ = self._zem()                # site -> touchdown, m, signed
+        m_signed, _ = self._zem()  # site -> touchdown, m, signed
         malt = max(1.0, d - R)
         a_max = u.rocket.stages[u._stage].thrust / u._mass
         g = mu / (d * d)
         a_net = max(0.5, a_max - g)
-        stop_ratio = vimp * vimp / (2.0 * a_net * malt)       # >1: cannot stop in time
-        brake_dv = vimp * (1.0 + g / a_net)                   # retro burn incl. gravity loss
+        stop_ratio = vimp * vimp / (2.0 * a_net * malt)  # >1: cannot stop in time
+        brake_dv = vimp * (1.0 + g / a_net)  # retro burn incl. gravity loss
         dv_rem = max(1.0, u.delta_v_remaining())
-        return np.array([
-            vimp / 1_000.0,
-            vr_i / 1_000.0,
-            vt_i / 1_000.0,
-            math.log1p(min(dt, 20_000.0)) / 10.0,
-            math.asinh(m_signed / 5_000.0) / 3.0,                # signed ZEM: asinh scale,
-                                                                  # 8 km -> 0.42, 300 km -> 1.6
-            min(2.0, stop_ratio) / 2.0,
-            min(2.0, brake_dv / dv_rem) / 2.0,
-            1.0 if reaches else 0.0,
-        ], np.float32)
+        return np.array(
+            [
+                vimp / 1_000.0,
+                vr_i / 1_000.0,
+                vt_i / 1_000.0,
+                math.log1p(min(dt, 20_000.0)) / 10.0,
+                math.asinh(m_signed / 5_000.0) / 3.0,  # signed ZEM: asinh scale,
+                # 8 km -> 0.42, 300 km -> 1.6
+                min(2.0, stop_ratio) / 2.0,
+                min(2.0, brake_dv / dv_rem) / 2.0,
+                1.0 if reaches else 0.0,
+            ],
+            np.float32,
+        )
 
     def _obs(self) -> np.ndarray:
         base = self.env._obs()

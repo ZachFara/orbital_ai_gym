@@ -1,0 +1,17 @@
+# Install with `make hooks`. Both hooks are local so they run the very same
+# commands as CI: there is one check (`make check`) and one message rule.
+repos:
+  - repo: local
+    hooks:
+      - id: make-check
+        name: make check
+        entry: make check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+      - id: conventional-commit-message
+        name: conventional commit message
+        entry: .venv/bin/python tools/check_commit_msg.py
+        language: system
+        stages: [commit-msg]

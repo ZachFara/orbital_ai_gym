@@ -75,10 +75,10 @@ Truncation at max_episode_steps (handled internally).
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, ClassVar
 
-import numpy as np
 import gymnasium as gym
+import numpy as np
 from gymnasium import spaces
 
 from ..presets import G0, PLANETS, ROCKETS, Planet, Rocket, total_delta_v
@@ -90,8 +90,7 @@ def _wrap_pi(angle: float) -> float:
     return (angle + math.pi) % TWO_PI - math.pi
 
 
-def _elements(mu: float, body_radius: float, rx: float, ry: float,
-              vx: float, vy: float):
+def _elements(mu: float, body_radius: float, rx: float, ry: float, vx: float, vy: float):
     """Orbital elements of a body-relative state:
     (periapsis_alt, apoapsis_alt, specific_energy, eccentricity).
 
@@ -111,7 +110,7 @@ def _elements(mu: float, body_radius: float, rx: float, ry: float,
 
 
 class TwoStageToOrbitEnv(gym.Env):
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
+    metadata: ClassVar[dict[str, Any]] = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
     OBS_SIZE = 9  # subclasses that append observations override this
     HOVER_K = 3.0  # hover_control action gain: a[0]=+-1 is exp(+-3) ~ 20x/0.05x hover
 
@@ -201,8 +200,9 @@ class TwoStageToOrbitEnv(gym.Env):
             if a0 <= -0.98:
                 throttle = 0.0
             else:
-                throttle = float(np.clip(
-                    self.hover_throttle() * math.exp(a0 * self.HOVER_K), 0.0, 1.0))
+                throttle = float(
+                    np.clip(self.hover_throttle() * math.exp(a0 * self.HOVER_K), 0.0, 1.0)
+                )
         else:
             throttle = float(np.clip((a[0] + 1.0) * 0.5, 0.0, 1.0))
         max_rate = self.rocket.max_turn_rate
@@ -214,8 +214,7 @@ class TwoStageToOrbitEnv(gym.Env):
             dr, dt_cmd = float(a[1]), float(a[2])
             wx = dr * ux + dt_cmd * tx
             wy = dr * uy + dt_cmd * ty
-            self._target_theta = math.atan2(wy, wx) if math.hypot(wx, wy) > 1e-6 \
-                else self._theta
+            self._target_theta = math.atan2(wy, wx) if math.hypot(wx, wy) > 1e-6 else self._theta
             stage_channel = 3
         else:
             turn_cmd = float(np.clip(a[1], -1.0, 1.0))
@@ -248,8 +247,9 @@ class TwoStageToOrbitEnv(gym.Env):
         if self.attitude_control:
             # cost the slew actually performed: same "whisper of control cost"
             # as the rate command, but there is no rate to read off the action
-            slew = abs(_wrap_pi(self._theta - theta_before)) / \
-                max(1e-9, max_rate * self.step_duration)
+            slew = abs(_wrap_pi(self._theta - theta_before)) / max(
+                1e-9, max_rate * self.step_duration
+            )
             reward -= self.turn_penalty * min(1.0, slew) * self.step_duration
         else:
             reward -= self.turn_penalty * abs(turn_cmd) * self.step_duration
@@ -257,25 +257,15 @@ class TwoStageToOrbitEnv(gym.Env):
         if self._terminal == "crashed":
             reward -= self.crash_penalty
 
-        peri, apo, energy, ecc = self._orbit_elements()
+        peri, _apo, energy, ecc = self._orbit_elements()
         if self._terminal is None:
-            if (
-                alt_after > cutoff
-                and self._propellant_left() <= 0.0
-                and self._is_escaping()
-            ):
+            if alt_after > cutoff and self._propellant_left() <= 0.0 and self._is_escaping():
                 self._terminal = "escaped"
-            elif (
-                self.terminate_on_orbit
-                and alt_after > cutoff
-                and energy < 0.0
-                and peri > cutoff
-            ):
+            elif self.terminate_on_orbit and alt_after > cutoff and energy < 0.0 and peri > cutoff:
                 remaining = max(0, self.max_episode_steps - self._steps)
                 circ = max(0.0, 1.0 - ecc / self.orbit_ecc_scale)
                 reward += (
-                    (self.space_rate + self.orbit_rate * circ)
-                    * self.step_duration * remaining
+                    (self.space_rate + self.orbit_rate * circ) * self.step_duration * remaining
                 )
                 self._terminal = "orbit"
 
@@ -294,6 +284,7 @@ class TwoStageToOrbitEnv(gym.Env):
             return None
         if self._renderer is None:
             from ..rendering import Renderer
+
             self._renderer = Renderer(self, self.render_mode)
         return self._renderer.draw()
 
@@ -304,7 +295,9 @@ class TwoStageToOrbitEnv(gym.Env):
 
     # --- Physics ------------------------------------------------------------
 
-    def _extra_acceleration(self, rx: float, ry: float, vx: float, vy: float) -> tuple[float, float]:
+    def _extra_acceleration(
+        self, rx: float, ry: float, vx: float, vy: float
+    ) -> tuple[float, float]:
         """Mission-specific acceleration term (default none).
 
         Subclasses can override this to add third-body gravity, SRP, etc.
@@ -399,11 +392,14 @@ class TwoStageToOrbitEnv(gym.Env):
             return
         dropped = self.rocket.stages[self._stage]
         self._debris = {
-            "rx": self._rx, "ry": self._ry,
+            "rx": self._rx,
+            "ry": self._ry,
             "vx": self._vx - 3.0 * math.cos(self._theta),
             "vy": self._vy - 3.0 * math.sin(self._theta),
-            "theta": self._theta, "spin": 0.5 if self._steps % 2 else -0.5,
-            "age": 0.0, "cd_area": dropped.cd_area,
+            "theta": self._theta,
+            "spin": 0.5 if self._steps % 2 else -0.5,
+            "age": 0.0,
+            "cd_area": dropped.cd_area,
             "mass": max(1.0, dropped.dry_mass),
         }
         self._mass -= dropped.dry_mass + self._fuel
@@ -415,11 +411,7 @@ class TwoStageToOrbitEnv(gym.Env):
     def _climb_term(self, alt_before: float, alt_after: float) -> float:
         """Potential-based climb reward; sums to climb_reward for reaching space."""
         cutoff = self.planet.space_altitude
-        return (
-            self.climb_reward
-            * (min(alt_after, cutoff) - min(alt_before, cutoff))
-            / cutoff
-        )
+        return self.climb_reward * (min(alt_after, cutoff) - min(alt_before, cutoff)) / cutoff
 
     def _step_reward(self, alt_before: float, alt_after: float, space_time: float) -> float:
         """Per-step reward, called after the substeps (terminal already set if
@@ -461,7 +453,7 @@ class TwoStageToOrbitEnv(gym.Env):
 
     def _pitch(self) -> float:
         """Attitude angle above the local horizon, in (-pi, pi]."""
-        ux, uy, tx, ty = self._local_frame()
+        _ux, _uy, tx, ty = self._local_frame()
         return _wrap_pi(self._theta - math.atan2(ty, tx))
 
     def _orbit_elements(self):
@@ -478,7 +470,7 @@ class TwoStageToOrbitEnv(gym.Env):
         return self._orbit_elements()[2] >= 0.0
 
     def _propellant_left(self) -> float:
-        upper = sum(s.prop_mass for s in self.rocket.stages[self._stage + 1:])
+        upper = sum(s.prop_mass for s in self.rocket.stages[self._stage + 1 :])
         return self._fuel + upper
 
     def delta_v_remaining(self) -> float:

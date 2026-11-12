@@ -1,11 +1,10 @@
 import math
 
+import gymnasium as gym
 import numpy as np
 import pytest
-import gymnasium as gym
 from gymnasium.utils.env_checker import check_env
 
-import orbital_gym
 from orbital_gym.missions.orbit_and_return import OrbitAndReturnEnv
 
 IDLE = np.array([-1.0, 0.0, 0.0], dtype=np.float32)  # throttle 0, hold attitude
@@ -31,9 +30,9 @@ def test_registered_id_and_obs_shape():
     obs, info = env.reset()
     assert obs.shape == (12,)
     # at reset the rocket sits on the pad: bearing 0, no hold progress
-    assert obs[9] == pytest.approx(0.0, abs=1e-6)   # sin(bearing)
+    assert obs[9] == pytest.approx(0.0, abs=1e-6)  # sin(bearing)
     assert obs[10] == pytest.approx(1.0, abs=1e-6)  # cos(bearing)
-    assert obs[11] == 0.0                            # orbit progress
+    assert obs[11] == 0.0  # orbit progress
     assert info["returning"] is False
     env.close()
 
@@ -138,7 +137,7 @@ def test_landing_on_pad_bonus_and_relabel():
     make_returning(env, 0.0, p.radius + 150.0, 0.0, -1.0)
     total, info = 0.0, None
     for _ in range(30):
-        _, r, terminated, *_ , info = env.step(IDLE)
+        _, r, terminated, *_, info = env.step(IDLE)
         total += r
         if terminated:
             break
@@ -155,7 +154,7 @@ def test_landing_far_from_pad_gets_no_bonus():
     make_returning(env, r * math.cos(ang), r * math.sin(ang), 0.0, 0.0)
     info = None
     for _ in range(30):
-        _, r_, terminated, *_ , info = env.step(IDLE)
+        _, _reward, terminated, *_, info = env.step(IDLE)
         if terminated:
             break
     assert info["termination"] == "landed"
@@ -168,7 +167,7 @@ def test_crash_penalty_applies_in_return_phase():
     make_returning(env, 0.0, p.radius + 3_000.0, 0.0, -200.0)
     total, info = 0.0, None
     for _ in range(60):
-        _, r, terminated, *_ , info = env.step(IDLE)
+        _, r, terminated, *_, info = env.step(IDLE)
         total += r
         if terminated:
             break

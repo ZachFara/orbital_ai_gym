@@ -40,10 +40,11 @@ the existing map view, SOI re-centering and HUD work unchanged, and adds
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import numpy as np
 
-from ..presets import PLANETS, ROCKETS, SYSTEMS, Planet, Rocket, StarSystem
+from ..presets import PLANETS, SYSTEMS, Planet, Rocket, StarSystem
 from .to_orbit import TWO_PI, TwoStageToOrbitEnv, _elements, _wrap_pi
 
 
@@ -87,8 +88,9 @@ class ToMarsEnv(TwoStageToOrbitEnv):
         self.home_r = self.system.home_orbit_radius
         self.home_w = TWO_PI / self.system.home_orbit_period
         self.target_w = TWO_PI / self.target.orbit_period
-        self.target_phase0 = (self.system.target_phase0 if target_phase0 is None
-                              else float(target_phase0))
+        self.target_phase0 = (
+            self.system.target_phase0 if target_phase0 is None else float(target_phase0)
+        )
         self.planet_soi = self.home_r * (planet_obj.mu / self.star.mu) ** 0.4
         self.mars_soi = self.target.orbit_radius * (self.target.mu / self.star.mu) ** 0.4
         self.moon_soi = self.mars_soi
@@ -127,7 +129,7 @@ class ToMarsEnv(TwoStageToOrbitEnv):
             render_mode=render_mode,
         )
 
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
+    def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         if options and "site_angle" in options:
             self._site_angle = float(options["site_angle"])
         elif not hasattr(self, "_site_angle"):
@@ -176,8 +178,7 @@ class ToMarsEnv(TwoStageToOrbitEnv):
 
     def _mars_helio(self, t=None):
         a = self._mars_angle(t)
-        return (self.target.orbit_radius * math.cos(a),
-                self.target.orbit_radius * math.sin(a))
+        return (self.target.orbit_radius * math.cos(a), self.target.orbit_radius * math.sin(a))
 
     def _mars_world(self, t=None):
         mx, my = self._mars_helio(t)
@@ -193,8 +194,7 @@ class ToMarsEnv(TwoStageToOrbitEnv):
     def _mars_site_world(self, t=None):
         mx, my = self._mars_world(t)
         a = self._mars_angle(t) + self._site_angle
-        return (mx + self.target.radius * math.cos(a),
-                my + self.target.radius * math.sin(a))
+        return (mx + self.target.radius * math.cos(a), my + self.target.radius * math.sin(a))
 
     _moon_world = _mars_world
     _moon_velocity = _mars_velocity
@@ -240,9 +240,14 @@ class ToMarsEnv(TwoStageToOrbitEnv):
     def _mars_orbit_elements(self):
         mx, my = self._mars_world()
         mvx, mvy = self._mars_velocity()
-        return _elements(self.target.mu, self.target.radius,
-                         self._rx - mx, self._ry - my,
-                         self._vx - mvx, self._vy - mvy)
+        return _elements(
+            self.target.mu,
+            self.target.radius,
+            self._rx - mx,
+            self._ry - my,
+            self._vx - mvx,
+            self._vy - mvy,
+        )
 
     _moon_orbit_elements = _mars_orbit_elements
 
@@ -273,8 +278,7 @@ class ToMarsEnv(TwoStageToOrbitEnv):
         if ecc < 1e-9 or abs(h) < 1.0:
             return abs(h) < 1.0, _wrap_pi(theta_r - site)
         p_param = h * h / mu
-        f0 = math.copysign(
-            math.acos(max(-1.0, min(1.0, (p_param / r - 1.0) / ecc))), rv)
+        f0 = math.copysign(math.acos(max(-1.0, min(1.0, (p_param / r - 1.0) / ecc))), rv)
         sgn = math.copysign(1.0, h)
         cos_fi = (p_param / R - 1.0) / ecc
         if cos_fi > 1.0:
@@ -372,7 +376,7 @@ class ToMarsEnv(TwoStageToOrbitEnv):
     def _obs(self) -> np.ndarray:
         x, y, vx, vy = self.rocket_helio()
         r2 = self.target.orbit_radius
-        hp, ha, henergy, hecc = self._helio_elements()
+        hp, ha, _henergy, hecc = self._helio_elements()
         vdir = math.atan2(vy, vx) if math.hypot(vx, vy) > 1.0 else self._home_angle() + math.pi / 2
         mhx, mhy = self._mars_helio()
         mars_b = _wrap_pi(math.atan2(mhy - y, mhx - x) - vdir)
@@ -405,22 +409,29 @@ class ToMarsEnv(TwoStageToOrbitEnv):
 
         extras = np.array(
             [
-                x / r2, y / r2,                               # heliocentric position
-                vx / self.v_home, vy / self.v_home,           # heliocentric velocity
-                min(3.0, max(0.0, (hp + self.star.radius) / r2)),   # helio periapsis / r2
+                x / r2,
+                y / r2,  # heliocentric position
+                vx / self.v_home,
+                vy / self.v_home,  # heliocentric velocity
+                min(3.0, max(0.0, (hp + self.star.radius) / r2)),  # helio periapsis / r2
                 min(3.0, (ha + self.star.radius) / r2) if math.isfinite(ha) else 3.0,
                 min(2.0, hecc),
-                math.sin(mars_b), math.cos(mars_b),           # target bearing vs velocity
+                math.sin(mars_b),
+                math.cos(mars_b),  # target bearing vs velocity
                 min(3.0, self._mars_distance() / r2),
-                math.sin(site_b), math.cos(site_b),
+                math.sin(site_b),
+                math.cos(site_b),
                 progress,
-                math.sin(lead), math.cos(lead),               # target's lead angle: the window
+                math.sin(lead),
+                math.cos(lead),  # target's lead angle: the window
                 math.log1p(malt / 1_000.0),
                 min(malt, 20_000.0) / 20_000.0,
                 vr_m / 1_000.0,
                 vt_m / 1_000.0,
-                math.sin(pitch_m), math.cos(pitch_m),
-                math.sin(dsite), math.cos(dsite),
+                math.sin(pitch_m),
+                math.cos(pitch_m),
+                math.sin(dsite),
+                math.cos(dsite),
                 self.delta_v_remaining() / self.total_delta_v(),
                 min(2.0, g_m / a_max) / 2.0,
                 min(2.0, need / max(a_max - g_m, 1e-3)) / 2.0,
@@ -431,7 +442,7 @@ class ToMarsEnv(TwoStageToOrbitEnv):
                 1.0 if soi == "planet" else 0.0,
                 1.0 if soi == "sun" else 0.0,
                 1.0 if soi == "mars" else 0.0,
-                min(1.0, q / 2_000.0),                        # dynamic pressure at the target
+                min(1.0, q / 2_000.0),  # dynamic pressure at the target
             ],
             dtype=np.float32,
         )
@@ -444,22 +455,34 @@ class ToMarsEnv(TwoStageToOrbitEnv):
         mvx, mvy = self._mars_velocity()
         rel = math.hypot(self._vx - mvx, self._vy - mvy)
         d = self._mars_distance()
-        info.update({
-            "mars_x": mx, "mars_y": my, "mars_radius": self.target.radius,
-            "mars_distance": d, "mars_altitude": d - self.target.radius,
-            "mars_site_x": sx, "mars_site_y": sy,
-            "mars_site_distance": self._mars_site_distance(),
-            "mars_rel_speed": rel, "mars_soi": self.mars_soi,
-            "planet_soi": self.planet_soi, "sun_distance": self._sun_distance(),
-            "lead_angle": _wrap_pi(self._mars_angle() - self._home_angle()),
-            "orbit_progress": min(1.0, self._orbit_angle / self._required_angle),
-            "transfer": self._transfer,
-            # renderer-compatible aliases
-            "moon_x": mx, "moon_y": my, "moon_radius": self.target.radius,
-            "moon_distance": d, "moon_rel_speed": rel, "moon_soi": self.mars_soi,
-            "moon_site_distance": self._mars_site_distance(),
-            "site_angle": self._site_angle,
-        })
+        info.update(
+            {
+                "mars_x": mx,
+                "mars_y": my,
+                "mars_radius": self.target.radius,
+                "mars_distance": d,
+                "mars_altitude": d - self.target.radius,
+                "mars_site_x": sx,
+                "mars_site_y": sy,
+                "mars_site_distance": self._mars_site_distance(),
+                "mars_rel_speed": rel,
+                "mars_soi": self.mars_soi,
+                "planet_soi": self.planet_soi,
+                "sun_distance": self._sun_distance(),
+                "lead_angle": _wrap_pi(self._mars_angle() - self._home_angle()),
+                "orbit_progress": min(1.0, self._orbit_angle / self._required_angle),
+                "transfer": self._transfer,
+                # renderer-compatible aliases
+                "moon_x": mx,
+                "moon_y": my,
+                "moon_radius": self.target.radius,
+                "moon_distance": d,
+                "moon_rel_speed": rel,
+                "moon_soi": self.mars_soi,
+                "moon_site_distance": self._mars_site_distance(),
+                "site_angle": self._site_angle,
+            }
+        )
         impacting, miss = self._mars_impact()
         info["mars_impact"] = impacting
         info["mars_impact_miss"] = miss * self.target.radius

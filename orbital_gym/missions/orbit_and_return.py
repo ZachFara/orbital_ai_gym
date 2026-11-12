@@ -45,6 +45,7 @@ not available here (orbit is the midpoint of this mission, not the end).
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import numpy as np
 
@@ -105,7 +106,7 @@ class OrbitAndReturnEnv(TwoStageToOrbitEnv):
         )
         self._d_scale = 2.0 * self.planet.radius
 
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
+    def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         self._orbit_angle = 0.0
         self._returning = False
         self._last_ang = math.pi / 2.0  # polar angle of the pad
@@ -160,9 +161,7 @@ class OrbitAndReturnEnv(TwoStageToOrbitEnv):
     def _obs(self) -> np.ndarray:
         bearing = self._pad_bearing()
         progress = min(1.0, self._orbit_angle / self._required_angle)
-        extra = np.array(
-            [math.sin(bearing), math.cos(bearing), progress], dtype=np.float32
-        )
+        extra = np.array([math.sin(bearing), math.cos(bearing), progress], dtype=np.float32)
         return np.concatenate([super()._obs(), extra])
 
     def _info(self):

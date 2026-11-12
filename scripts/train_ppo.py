@@ -31,10 +31,10 @@ try:
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor, VecNormalize
 except ImportError:
-    raise SystemExit("stable-baselines3 not installed; run: pip install -e '.[train]'")
+    raise SystemExit("stable-baselines3 not installed; run: pip install -e '.[train]'") from None
 
-from orbital_gym.missions.to_orbit import TwoStageToOrbitEnv
 from orbital_gym.missions.orbit_and_return import OrbitAndReturnEnv
+from orbital_gym.missions.to_orbit import TwoStageToOrbitEnv
 
 MISSIONS = {"orbit": TwoStageToOrbitEnv, "return": OrbitAndReturnEnv}
 
@@ -58,22 +58,25 @@ def evaluate(model_path: str, episodes: int, device: str, mission: str) -> None:
         returns.append(info["episode_return"])
         if mission == "return":
             success = info["termination"] == "landed_on_pad"
-            extra = (f"touchdown {info['pad_downrange'] / 1000:7.2f} km from pad"
-                     f"{'  ON PAD' if success else ''}")
+            extra = (
+                f"touchdown {info['pad_downrange'] / 1000:7.2f} km from pad"
+                f"{'  ON PAD' if success else ''}"
+            )
         else:
             success = info["termination"] == "time_limit" and info["orbit"]
             extra = f"e {info['eccentricity']:5.3f}{'  HELD ORBIT' if success else ''}"
         successes += success
         apo = info["apoapsis"]
         apo_s = "inf" if not math.isfinite(apo) else f"{apo / 1000:6.1f}"
-        print(f"ep {ep + 1:2d}: {info['termination']:<14} return {info['episode_return']:7.1f}  "
-              f"in space {space_s:5.0f} s  "
-              f"final orbit {info['periapsis'] / 1000:6.1f} x {apo_s} km  "
-              f"dv used {info['dv_used']:4.0f} m/s  {extra}")
+        print(
+            f"ep {ep + 1:2d}: {info['termination']:<14} return {info['episode_return']:7.1f}  "
+            f"in space {space_s:5.0f} s  "
+            f"final orbit {info['periapsis'] / 1000:6.1f} x {apo_s} km  "
+            f"dv used {info['dv_used']:4.0f} m/s  {extra}"
+        )
     print("-" * 64)
     label = "landed on the pad" if mission == "return" else "held orbit to time limit"
-    print(f"{label} {successes}/{episodes}  "
-          f"mean return {sum(returns) / len(returns):.1f}")
+    print(f"{label} {successes}/{episodes}  mean return {sum(returns) / len(returns):.1f}")
 
 
 def main():
@@ -86,8 +89,9 @@ def main():
         default="auto",
         help="torch device for train/eval/watch (examples: auto, cpu, cuda, mps)",
     )
-    ap.add_argument("--out", default=None,
-                    help="model save path (default: models/ppo_orbit_<timestamp>)")
+    ap.add_argument(
+        "--out", default=None, help="model save path (default: models/ppo_orbit_<timestamp>)"
+    )
     ap.add_argument("--watch", default=None, help="path to a saved model to watch")
     ap.add_argument("--eval", type=int, default=0, help="evaluate N episodes headless")
     args = ap.parse_args()
@@ -113,10 +117,12 @@ def main():
                     env.close()
                     return
             action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action)
+            obs, _reward, terminated, truncated, info = env.step(action)
             if terminated or truncated:
-                print(f"episode over: {info['termination']}, "
-                      f"orbit {info['periapsis'] / 1000:.0f} x {info['apoapsis'] / 1000:.0f} km")
+                print(
+                    f"episode over: {info['termination']}, "
+                    f"orbit {info['periapsis'] / 1000:.0f} x {info['apoapsis'] / 1000:.0f} km"
+                )
                 obs, info = env.reset()
 
     # VecMonitor inside VecNormalize so the logged ep_rew_mean stays in raw

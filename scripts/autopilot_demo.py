@@ -25,10 +25,10 @@ import math
 import numpy as np
 
 import orbital_gym
-from orbital_gym.missions.to_orbit import TWO_PI, TwoStageToOrbitEnv, _wrap_pi
 from orbital_gym.missions.orbit_and_return import OrbitAndReturnEnv
-from orbital_gym.missions.to_moon import ToMoonEnv
 from orbital_gym.missions.to_mars import ToMarsEnv
+from orbital_gym.missions.to_moon import ToMoonEnv
+from orbital_gym.missions.to_orbit import TWO_PI, TwoStageToOrbitEnv, _wrap_pi
 
 
 def _throttle_action(env, throttle: float) -> float:
@@ -59,7 +59,7 @@ class Autopilot:
         self.mode = "ascend"
 
     def __call__(self, info: dict) -> np.ndarray:
-        env, p = self.env, self.env.planet
+        p = self.env.planet
         alt, apo, peri, vr = info["altitude"], info["apoapsis"], info["periapsis"], info["vr"]
         cutoff = p.space_altitude
         apo_target = 1.18 * cutoff
@@ -111,11 +111,13 @@ class Autopilot:
         if env.attitude_control:
             # pitch is elevation above the local horizon, so the desired
             # direction is sin(pitch) radial + cos(pitch) tangential
-            return np.array([_throttle_action(self.env, throttle),math.sin(pitch), math.cos(pitch)],
-                            dtype=np.float32)
+            return np.array(
+                [_throttle_action(self.env, throttle), math.sin(pitch), math.cos(pitch)],
+                dtype=np.float32,
+            )
         err = _wrap_pi(pitch - math.radians(info["pitch_deg"]))
         turn = np.clip(err / (env.rocket.max_turn_rate * env.step_duration), -1.0, 1.0)
-        return np.array([_throttle_action(self.env, throttle),turn], dtype=np.float32)
+        return np.array([_throttle_action(self.env, throttle), turn], dtype=np.float32)
 
 
 class ReturnAutopilot(Autopilot):
@@ -211,18 +213,18 @@ class MoonAutopilot:
     Reaching the site is what train_guided.py leaves for RL to learn.
     """
 
-    PERI_FRAC = 1.03       # parking-orbit periapsis, * atmosphere cutoff
-    LEVEL_FRAC = 1.04      # level-burn altitude, * cutoff (must exceed PERI_FRAC)
-    TURN_END_FRAC = 0.5    # pitch schedule reaches horizontal at this * cutoff
+    PERI_FRAC = 1.03  # parking-orbit periapsis, * atmosphere cutoff
+    LEVEL_FRAC = 1.04  # level-burn altitude, * cutoff (must exceed PERI_FRAC)
+    TURN_END_FRAC = 0.5  # pitch schedule reaches horizontal at this * cutoff
     TURN_EXP = 0.78
     TLI_BAND = (0.995, 1.005)  # accepted transfer apoapsis, * moon orbit radius
-    BRAKE_MARGIN = 0.93    # accel fraction the stopping-distance trigger assumes
-    BRAKE_LEAD = 1.28      # stopping distance vs radial gap; center of the
-                           # landing plateau [1.20, 1.35] on the moon rocket
-                           # (scanned; the Keplerian moon's arrival is slow
-                           # and shallow, so the flight path runs well past
-                           # the radial gap)
-    GATE_ALT = 4_000.0     # descend handoff altitude scale, m
+    BRAKE_MARGIN = 0.93  # accel fraction the stopping-distance trigger assumes
+    BRAKE_LEAD = 1.28  # stopping distance vs radial gap; center of the
+    # landing plateau [1.20, 1.35] on the moon rocket
+    # (scanned; the Keplerian moon's arrival is slow
+    # and shallow, so the flight path runs well past
+    # the radial gap)
+    GATE_ALT = 4_000.0  # descend handoff altitude scale, m
     SITE_REACH = 30_000.0  # only steer for the site when within this, m
     # -- site targeting (the "divert"). The touchdown longitude is the
     # periapsis of the moon-relative approach, fixed by the transfer, so the
@@ -231,25 +233,25 @@ class MoonAutopilot:
     # and far out where a small cross-track burn has a long lever arm and there
     # is no retro burn to steal thrust from; below HANDOFF_ALT the normal
     # brake+descend lands, now with the site inside its reach.
-    HANDOFF_ALT = 120_000.0   # aim above this, brake/land below, m
-    DIVERT_N = 3.0            # ZEM cross-track navigation gain
-    DIVERT_CAP = 0.4         # max fraction of thrust spent aiming
+    HANDOFF_ALT = 120_000.0  # aim above this, brake/land below, m
+    DIVERT_N = 3.0  # ZEM cross-track navigation gain
+    DIVERT_CAP = 0.4  # max fraction of thrust spent aiming
     DIVERT_DEADBAND = 4_000.0  # stop aiming once predicted miss is under this, m
-    DIVERT_BUDGET = 2_500.0   # delta-v ceiling on aiming, m/s: past it, stop and
-                              # land soft where we are rather than run the tank
-                              # dry braking (a soft off-site landing beats a crash)
+    DIVERT_BUDGET = 2_500.0  # delta-v ceiling on aiming, m/s: past it, stop and
+    # land soft where we are rather than run the tank
+    # dry braking (a soft off-site landing beats a crash)
     # -- orbit-first capture (opt-in). Rather than a direct suicide descent, the
     # vehicle brakes into a low circular parking orbit; from there the landing
     # site is reachable by choosing WHEN to deorbit (KSP-style), which turns
     # site targeting from a thrust-saturated cross-track fight into a clean
     # timing decision -- the shape the RL problem needs.
     CAPTURE_ALT = 140_000.0  # begin the capture burn at this moon altitude, m
-    PARK_ALT = 60_000.0      # target circular parking-orbit altitude, m
-    DEORBIT_LEAD = 0.20      # deorbit when the site is this far ahead in the
-                             # orbit (rad); the descent then lands on it. Measured
-                             # constant across sites (one value hits -90..+150 deg
-                             # on-site) -- it is a property of the descent
-                             # geometry, so the SAME wait hits any site.
+    PARK_ALT = 60_000.0  # target circular parking-orbit altitude, m
+    DEORBIT_LEAD = 0.20  # deorbit when the site is this far ahead in the
+    # orbit (rad); the descent then lands on it. Measured
+    # constant across sites (one value hits -90..+150 deg
+    # on-site) -- it is a property of the descent
+    # geometry, so the SAME wait hits any site.
     DEORBIT_PERI = -40_000.0  # burn retrograde until periapsis drops to here, m
 
     def __init__(self, env: ToMoonEnv, divert: bool = False, orbit: bool = False):
@@ -305,10 +307,12 @@ class MoonAutopilot:
             # project the desired world direction onto the local frame
             ux, uy, tx, ty = e._local_frame()
             wx, wy = math.cos(theta), math.sin(theta)
-            return np.array([_throttle_action(self.env, throttle),wx * ux + wy * uy, wx * tx + wy * ty],
-                            dtype=np.float32)
+            return np.array(
+                [_throttle_action(self.env, throttle), wx * ux + wy * uy, wx * tx + wy * ty],
+                dtype=np.float32,
+            )
         turn = np.clip(err / (e.rocket.max_turn_rate * e.step_duration), -1.0, 1.0)
-        return np.array([_throttle_action(self.env, throttle),turn], dtype=np.float32)
+        return np.array([_throttle_action(self.env, throttle), turn], dtype=np.float32)
 
     def _act_elev(self, elev: float, throttle: float, u, tw, gate=None):
         d = math.cos(elev) * tw + math.sin(elev) * u
@@ -361,9 +365,9 @@ class MoonAutopilot:
                 vr_des = min(40.0, max(-15.0, 0.02 * (self.h_ref - alt)))
                 a_v = g_eff + 0.4 * (vr_des - vr)
                 a_h = min(a_av, max(0.0, 0.8 * (v_need - vtw)))
-                return self._act_elev(math.atan2(a_v, a_h),
-                                      min(1.0, math.hypot(a_v, a_h) / a_av),
-                                      u, tw)
+                return self._act_elev(
+                    math.atan2(a_v, a_h), min(1.0, math.hypot(a_v, a_h) / a_av), u, tw
+                )
 
         # -- hold: coast until the orbit-hold is complete AND a transfer
         # solution exists. Each step, solve (Kepler) for the apoapsis a
@@ -382,9 +386,9 @@ class MoonAutopilot:
                     nu = math.acos(max(-1.0, min(1.0, cosnu)))
                     ecc_an = 2.0 * math.atan2(
                         math.sqrt(1.0 - e) * math.sin(nu / 2.0),
-                        math.sqrt(1.0 + e) * math.cos(nu / 2.0))
-                    t_x = (ecc_an - e * math.sin(ecc_an)) / math.sqrt(
-                        p.mu / a_sma ** 3)
+                        math.sqrt(1.0 + e) * math.cos(nu / 2.0),
+                    )
+                    t_x = (ecc_an - e * math.sin(ecc_an)) / math.sqrt(p.mu / a_sma**3)
                     return _wrap_pi(moon_ang + w_m * t_x - theta_r - nu)
 
                 lo_f, hi_f = self.TLI_BAND
@@ -404,19 +408,18 @@ class MoonAutopilot:
                     self._trim = True
                 if self._trim and peri >= 1.025 * cutoff:
                     self._trim = False
-                return self._act_elev(prograde, 0.3 if self._trim else 0.0,
-                                      u, tw, gate=0.2)
+                return self._act_elev(prograde, 0.3 if self._trim else 0.0, u, tw, gate=0.2)
 
         if self.mode == "tli":
             # burn prograde up to the transfer-ellipse speed, throttle
             # tapered (apoapsis is far too cutoff-sensitive for 1 s steps)
-            v_go = math.sqrt(p.mu * (2.0 / rn - 2.0 / (rn + self._ra_target))) \
-                - math.hypot(float(env._vx), float(env._vy))
+            v_go = math.sqrt(p.mu * (2.0 / rn - 2.0 / (rn + self._ra_target))) - math.hypot(
+                float(env._vx), float(env._vy)
+            )
             if v_go <= 0.0:
                 self.mode = "transfer"
             else:
-                return self._act_elev(prograde, min(1.0, max(0.05, v_go / 25.0)),
-                                      u, tw, gate=0.3)
+                return self._act_elev(prograde, min(1.0, max(0.05, v_go / 25.0)), u, tw, gate=0.3)
 
         prel = r - mpos
         vrel = v - mvel
@@ -427,8 +430,7 @@ class MoonAutopilot:
                 self.mode = "capture" if self.orbit else "brake"
             else:
                 div = self._divert(prel, vrel, d)
-                return div if div is not None else \
-                    self._act_elev(prograde, 0.0, u, tw)
+                return div if div is not None else self._act_elev(prograde, 0.0, u, tw)
 
         if self.mode in ("capture", "moon_orbit", "deorbit", "pdescend"):
             return self._orbit_control(prel, vrel, d)
@@ -439,8 +441,7 @@ class MoonAutopilot:
             div = self._divert(prel, vrel, d)
             if div is not None:
                 return div
-            if (speed < 70.0 and malt < 8.0 * self.GATE_ALT) \
-                    or malt < 1.2 * self.GATE_ALT:
+            if (speed < 70.0 and malt < 8.0 * self.GATE_ALT) or malt < 1.2 * self.GATE_ALT:
                 self.mode = "descend"
             else:
                 return self._brake(info, prel, vrel, d)
@@ -470,7 +471,7 @@ class MoonAutopilot:
         g_m = moon.mu / (d * d)
         v_circ = math.sqrt(moon.mu / d)
         a_av = self._accel_avail_moon()
-        peri, apo, energy, ecc = e._moon_orbit_elements()
+        peri, _apo, _energy, ecc = e._moon_orbit_elements()
 
         if self.mode == "capture":
             # coast in retrograde until low enough to start the capture burn
@@ -504,8 +505,7 @@ class MoonAutopilot:
         a_t = 0.7 * (sgn * v_circ - v_t)
         a_cmd = a_r * um + a_t * tm
         mag = float(np.linalg.norm(a_cmd))
-        return self._act_world(math.atan2(a_cmd[1], a_cmd[0]),
-                               min(1.0, mag / a_av), gate=0.6)
+        return self._act_world(math.atan2(a_cmd[1], a_cmd[0]), min(1.0, mag / a_av), gate=0.6)
 
     def _pdescend(self, prel, vrel, d: float) -> np.ndarray:
         """Powered descent from the deorbit, landing soft.
@@ -526,7 +526,7 @@ class MoonAutopilot:
         vhat = vrel / max(1.0, v)
         a_av = self._accel_avail_moon()
         g_m = m.mu / (d * d)
-        v_r = float(vrel @ um)      # radial velocity (negative descending)
+        v_r = float(vrel @ um)  # radial velocity (negative descending)
         v_t = float(vrel @ tm)
 
         # max speed we can still bleed to zero by the surface, with margin
@@ -539,9 +539,11 @@ class MoonAutopilot:
             a_r = g_m + 0.8 * (vr_des - v_r)
             a_t = -0.8 * v_t
             a_cmd = a_r * um + a_t * tm
-            return self._act_world(math.atan2(a_cmd[1], a_cmd[0]),
-                                   min(1.0, float(np.linalg.norm(a_cmd)) / a_av),
-                                   gate=0.6)
+            return self._act_world(
+                math.atan2(a_cmd[1], a_cmd[0]),
+                min(1.0, float(np.linalg.norm(a_cmd)) / a_av),
+                gate=0.6,
+            )
 
         if v > 0.9 * v_prof:
             # on/above the profile: brake retrograde at full thrust, with just
@@ -556,9 +558,9 @@ class MoonAutopilot:
         a_r = max(0.0, g_m + 0.6 * (vr_des - v_r))
         a_t = -0.6 * v_t
         a_cmd = a_r * um + a_t * tm
-        return self._act_world(math.atan2(a_cmd[1], a_cmd[0]),
-                               min(1.0, float(np.linalg.norm(a_cmd)) / a_av),
-                               gate=0.6)
+        return self._act_world(
+            math.atan2(a_cmd[1], a_cmd[0]), min(1.0, float(np.linalg.norm(a_cmd)) / a_av), gate=0.6
+        )
 
     def _divert(self, prel, vrel, d: float):
         """Aim the coasting approach at the site with ZEM cross-track guidance.
@@ -571,8 +573,7 @@ class MoonAutopilot:
         the deadband, so it costs only the delta-v the aim actually needs.
         """
         e = self.env
-        if not self.enable_divert or self._burning \
-                or (d - e.moon.radius) < self.HANDOFF_ALT:
+        if not self.enable_divert or self._burning or (d - e.moon.radius) < self.HANDOFF_ALT:
             return None
         dv_now = e.delta_v_remaining()
         if self._dv_at_divert is None:
@@ -597,8 +598,7 @@ class MoonAutopilot:
         if mag > self.DIVERT_CAP * a_av:
             a_lat *= self.DIVERT_CAP * a_av / mag
             mag = self.DIVERT_CAP * a_av
-        return self._act_world(math.atan2(a_lat[1], a_lat[0]),
-                               min(1.0, mag / a_av), gate=0.6)
+        return self._act_world(math.atan2(a_lat[1], a_lat[0]), min(1.0, mag / a_av), gate=0.6)
 
     def _accel_avail_moon(self) -> float:
         return self.env.rocket.stages[self.env._stage].thrust / self.env._mass
@@ -619,7 +619,7 @@ class MoonAutopilot:
         # straight-line time to impact (or to closest approach if missing)
         pv = float(prel @ vrel)
         vv = max(1.0, float(vrel @ vrel))
-        disc = pv * pv - vv * (float(prel @ prel) - moon.radius ** 2)
+        disc = pv * pv - vv * (float(prel @ prel) - moon.radius**2)
         t_go = max(2.0, (-pv - math.sqrt(disc)) / vv if disc > 0.0 else -pv / vv)
 
         a_lat = np.zeros(2)
@@ -633,8 +633,7 @@ class MoonAutopilot:
                     a_lat *= 0.15 * a_av / lat_mag
 
         a_net = max(1.0, self.BRAKE_MARGIN * a_av - g_m)
-        if pv < 0.0 and v * v / (2.0 * a_net) >= \
-                self.BRAKE_LEAD * max(1.0, d - moon.radius):
+        if pv < 0.0 and v * v / (2.0 * a_net) >= self.BRAKE_LEAD * max(1.0, d - moon.radius):
             self._burning = True
         if pv >= 0.0 and v > 300.0:
             self._burning = False  # never chase a missed flyby
@@ -661,8 +660,7 @@ class MoonAutopilot:
         vt_rel = float(vrel @ tm)
         tau = min(120.0, malt / max(8.0, -vr_rel))
         site = self._site_dir(tau)
-        x_err = _wrap_pi(math.atan2(site[1], site[0])
-                         - math.atan2(prel[1], prel[0])) * d
+        x_err = _wrap_pi(math.atan2(site[1], site[0]) - math.atan2(prel[1], prel[0])) * d
         if abs(x_err) > self.SITE_REACH:
             x_err = 0.0  # site out of cheap reach: land soft where we are
         vt_des = max(-60.0, min(60.0, 0.05 * x_err))
@@ -688,8 +686,9 @@ class MoonAutopilot:
         # is free fall, not a powered dive that must itself be killed
         a_r = max(0.0, g_m + ff + 0.8 * (vr_des - vr_rel))
         a_cmd = a_r * um + 0.8 * (vt_des - vt_rel) * tm
-        return self._act_world(math.atan2(a_cmd[1], a_cmd[0]),
-                               min(1.0, float(np.linalg.norm(a_cmd)) / a_av))
+        return self._act_world(
+            math.atan2(a_cmd[1], a_cmd[0]), min(1.0, float(np.linalg.norm(a_cmd)) / a_av)
+        )
 
 
 def lambert(mu: float, r1v, r2v, dt: float, prograde: bool = True):
@@ -710,10 +709,10 @@ def lambert(mu: float, r1v, r2v, dt: float, prograde: bool = True):
     def stumpff(z):
         if z > 1e-8:
             sz = math.sqrt(z)
-            return (1.0 - math.cos(sz)) / z, (sz - math.sin(sz)) / (sz ** 3)
+            return (1.0 - math.cos(sz)) / z, (sz - math.sin(sz)) / (sz**3)
         if z < -1e-8:
             sz = math.sqrt(-z)
-            return (math.cosh(sz) - 1.0) / (-z), (math.sinh(sz) - sz) / (sz ** 3)
+            return (math.cosh(sz) - 1.0) / (-z), (math.sinh(sz) - sz) / (sz**3)
         return 0.5, 1.0 / 6.0
 
     def y_of(z):
@@ -726,9 +725,9 @@ def lambert(mu: float, r1v, r2v, dt: float, prograde: bool = True):
             return None
         return (y / C) ** 1.5 * S + A * math.sqrt(y) - math.sqrt(mu) * dt
 
-    lo, hi = -4.0 * math.pi ** 2, 4.0 * math.pi ** 2 - 1e-6
+    lo, hi = -4.0 * math.pi**2, 4.0 * math.pi**2 - 1e-6
     f_lo = F(lo)
-    while f_lo is None and lo < hi:   # y < 0: raise the lower bracket
+    while f_lo is None and lo < hi:  # y < 0: raise the lower bracket
         lo += 1.0
         f_lo = F(lo)
     f_hi = F(hi)
@@ -741,7 +740,7 @@ def lambert(mu: float, r1v, r2v, dt: float, prograde: bool = True):
             lo = mid
         else:
             hi = mid
-    y, C, S = y_of(0.5 * (lo + hi))
+    y, _C, _S = y_of(0.5 * (lo + hi))
     f = 1.0 - y / r1
     g = A * math.sqrt(y / mu)
     gdot = 1.0 - y / r2
@@ -774,18 +773,18 @@ class MarsAutopilot(MoonAutopilot):
     site, like the moon pilot. Putting it on the site is left to learning.
     """
 
-    GAP_TOL = math.radians(1.0)     # arrival phase gap accepted at departure
-    PERI_FRAC = 1.5                 # higher parking orbit: the star's tide wobbles
-    LEVEL_FRAC = 1.52               # the periapsis by ~20 km, keep it clear of the air
-    MCC_BUDGET = 1_800.0            # m/s of midcourse correction allowed: the star's
-                                    # tide does ~1 km/s of work during the climb-out,
-                                    # so the heliocentric orbit after escape is not
-                                    # the patched-conic one and must be re-targeted
-    MCC_MIN = 1.0                   # m/s: smaller Lambert residuals are left alone
-    DEPART_MAX = 1_700.0            # m/s: depart when burn + predicted correction is under this
-    REPLAN_GAIN = 100.0             # adopt a new arrival plan only if it saves this much
-    REPLAN_RESIDUAL = 150.0         # ...or the residual to the current plan exceeds this
-    AIM_PERI = 150_000.0            # aim the approach at this target periapsis altitude
+    GAP_TOL = math.radians(1.0)  # arrival phase gap accepted at departure
+    PERI_FRAC = 1.5  # higher parking orbit: the star's tide wobbles
+    LEVEL_FRAC = 1.52  # the periapsis by ~20 km, keep it clear of the air
+    MCC_BUDGET = 1_800.0  # m/s of midcourse correction allowed: the star's
+    # tide does ~1 km/s of work during the climb-out,
+    # so the heliocentric orbit after escape is not
+    # the patched-conic one and must be re-targeted
+    MCC_MIN = 1.0  # m/s: smaller Lambert residuals are left alone
+    DEPART_MAX = 1_700.0  # m/s: depart when burn + predicted correction is under this
+    REPLAN_GAIN = 100.0  # adopt a new arrival plan only if it saves this much
+    REPLAN_RESIDUAL = 150.0  # ...or the residual to the current plan exceeds this
+    AIM_PERI = 150_000.0  # aim the approach at this target periapsis altitude
     # orbit-first arrival: capture right at the parking altitude (the moon
     # pilot's injection loop descends at <= 25 m/s, so a parking orbit far
     # below the capture would take hours to reach)
@@ -793,8 +792,8 @@ class MarsAutopilot(MoonAutopilot):
     PARK_ALT = 150_000.0
     DEORBIT_PERI = -60_000.0
     DEORBIT_LEAD = 0.20
-    REPLAN_EVERY = 600.0            # s between free-arrival-time re-plans
-    LANDING_RESERVE = 900.0         # s kept before the time limit for the landing
+    REPLAN_EVERY = 600.0  # s between free-arrival-time re-plans
+    LANDING_RESERVE = 900.0  # s kept before the time limit for the landing
 
     def __init__(self, env: ToMarsEnv):
         super().__init__(env, divert=False, orbit=False)
@@ -852,13 +851,15 @@ class MarsAutopilot(MoonAutopilot):
             return None
         pp = h * h / mu
         nu_now = math.copysign(math.acos(max(-1.0, min(1.0, (pp / rn - 1.0) / ecc))), rv)
-        nu2 = math.acos(max(-1.0, min(1.0, (pp / r2 - 1.0) / ecc)))   # outbound crossing
+        nu2 = math.acos(max(-1.0, min(1.0, (pp / r2 - 1.0) / ecc)))  # outbound crossing
 
         def mean_anom(nu):
-            E = 2.0 * math.atan2(math.sqrt(1.0 - ecc) * math.sin(nu / 2.0),
-                                 math.sqrt(1.0 + ecc) * math.cos(nu / 2.0))
+            E = 2.0 * math.atan2(
+                math.sqrt(1.0 - ecc) * math.sin(nu / 2.0), math.sqrt(1.0 + ecc) * math.cos(nu / 2.0)
+            )
             return E - ecc * math.sin(E)
-        n = math.sqrt(mu / a ** 3)
+
+        n = math.sqrt(mu / a**3)
         t2 = ((mean_anom(nu2) - mean_anom(nu_now)) % TWO_PI) / n
         sgn = 1.0 if h >= 0.0 else -1.0
         theta_arr = math.atan2(y, x) + sgn * ((nu2 - nu_now) % TWO_PI)
@@ -877,30 +878,32 @@ class MarsAutopilot(MoonAutopilot):
         rn = float(np.linalg.norm(r))
         theta_r = math.atan2(r[1], r[0])
         v_h = math.sqrt(e.star.mu / e.home_r)
-        v_inf_min = v_h * (math.sqrt(2.0 * e.target.orbit_radius
-                                     / (e.home_r + e.target.orbit_radius)) - 1.0)
+        v_inf_min = v_h * (
+            math.sqrt(2.0 * e.target.orbit_radius / (e.home_r + e.target.orbit_radius)) - 1.0
+        )
         best = None
         for k in range(60):
             v_inf = v_inf_min * (1.0 + 1.6 * k / 59.0)
             e_h = 1.0 + rn * v_inf * v_inf / p.mu
             nu_inf = math.acos(-1.0 / e_h)
-            psi = theta_r + nu_inf                      # CCW orbit: asymptote direction
+            psi = theta_r + nu_inf  # CCW orbit: asymptote direction
             a_h = p.mu / (v_inf * v_inf)
             cosh_H = (1.0 + e.planet_soi / a_h) / e_h
             H = math.acosh(max(1.0, cosh_H))
-            t_exit = (e_h * math.sinh(H) - H) / math.sqrt(p.mu / a_h ** 3)
+            t_exit = (e_h * math.sinh(H) - H) / math.sqrt(p.mu / a_h**3)
             t_dep = e._time + t_exit
             hx, hy = e._home_helio(t_dep)
             hvx, hvy = e._home_helio_velocity(t_dep)
             x = hx + e.planet_soi * math.cos(psi)
             y = hy + e.planet_soi * math.sin(psi)
-            res = self._gap_from_state(x, y, hvx + v_inf * math.cos(psi),
-                                       hvy + v_inf * math.sin(psi), t_dep)
+            res = self._gap_from_state(
+                x, y, hvx + v_inf * math.cos(psi), hvy + v_inf * math.sin(psi), t_dep
+            )
             if res is None:
                 continue
             gap, t2 = res
             if abs(gap) < self.GAP_TOL:
-                return v_inf, gap, t_dep + t2           # cheapest acceptable
+                return v_inf, gap, t_dep + t2  # cheapest acceptable
             if best is None or abs(gap) < abs(best[1]):
                 best = (v_inf, gap, t_dep + t2)
         return best
@@ -997,7 +1000,7 @@ class MarsAutopilot(MoonAutopilot):
 
     def _update_aim_offset(self, t_arr: float):
         e = self.env
-        x, y, vx, vy = e.rocket_helio()
+        x, y, _vx, _vy = e.rocket_helio()
         t_go = t_arr - e._time
         sol = lambert(e.star.mu, (x, y), e._mars_helio(t_arr), t_go)
         if sol is None:
@@ -1005,7 +1008,7 @@ class MarsAutopilot(MoonAutopilot):
         a = e._mars_angle(t_arr)
         sp = e.target_w * e.target.orbit_radius
         mvx, mvy = -sp * math.sin(a), sp * math.cos(a)
-        wx, wy = sol[1][0] - mvx, sol[1][1] - mvy          # target-relative arrival velocity
+        wx, wy = sol[1][0] - mvx, sol[1][1] - mvy  # target-relative arrival velocity
         v_inf = max(50.0, math.hypot(wx, wy))
         rp = e.target.radius + self.AIM_PERI
         b = rp * math.sqrt(1.0 + 2.0 * e.target.mu / (rp * v_inf * v_inf))
@@ -1062,8 +1065,9 @@ class MarsAutopilot(MoonAutopilot):
                 vr_des = min(40.0, max(-15.0, 0.02 * (self.h_ref - alt)))
                 a_v = g_eff + 0.4 * (vr_des - vr)
                 a_h = min(a_av, max(0.0, 0.8 * (v_need - vtw)))
-                return self._act_elev(math.atan2(a_v, a_h),
-                                      min(1.0, math.hypot(a_v, a_h) / a_av), u, tw)
+                return self._act_elev(
+                    math.atan2(a_v, a_h), min(1.0, math.hypot(a_v, a_h) / a_av), u, tw
+                )
 
         if self.mode == "hold":
             if info["orbit_progress"] >= 1.0 and env._steps % 20 == 0:
@@ -1079,8 +1083,7 @@ class MarsAutopilot(MoonAutopilot):
                     self._trim = True
                 if self._trim and peri >= 1.025 * cutoff:
                     self._trim = False
-                return self._act_elev(prograde, 0.3 if self._trim else 0.0,
-                                      u, tw, gate=0.2)
+                return self._act_elev(prograde, 0.3 if self._trim else 0.0, u, tw, gate=0.2)
 
         if self.mode == "depart":
             # cut off on delta-v delivered, not on speed: over a 100 s burn
@@ -1089,8 +1092,9 @@ class MarsAutopilot(MoonAutopilot):
             if v_go <= 0.0:
                 self.mode = "cruise"
             else:
-                return self._act_world(math.atan2(v[1], v[0]),
-                                       min(1.0, max(0.05, v_go / 25.0)), gate=0.3)
+                return self._act_world(
+                    math.atan2(v[1], v[0]), min(1.0, max(0.05, v_go / 25.0)), gate=0.3
+                )
 
         prel = r - mpos
         vrel = v - mvel
@@ -1110,19 +1114,26 @@ class MarsAutopilot(MoonAutopilot):
                     cur = None
                     if self.t_arrival > env._time + 300.0:
                         x, y, vx, vy = env.rocket_helio()
-                        sol = lambert(env.star.mu, (x, y), self._aim_point(self.t_arrival),
-                                      self.t_arrival - env._time)
+                        sol = lambert(
+                            env.star.mu,
+                            (x, y),
+                            self._aim_point(self.t_arrival),
+                            self.t_arrival - env._time,
+                        )
                         if sol is not None:
                             cur = math.hypot(sol[0][0] - vx, sol[0][1] - vy)
-                    if plan is not None and (cur is None or cur > self.REPLAN_RESIDUAL
-                                             or plan[1] < cur - self.REPLAN_GAIN):
+                    if plan is not None and (
+                        cur is None
+                        or cur > self.REPLAN_RESIDUAL
+                        or plan[1] < cur - self.REPLAN_GAIN
+                    ):
                         self.t_arrival = plan[0]
                         self._update_aim_offset(plan[0])
                         self.plan_log.append((env._time, plan[0], plan[1]))
                 t_go = self.t_arrival - env._time
                 if self._cruise_dv0 is None:
                     self._cruise_dv0 = env._dv_used
-                self._mcc_spent = env._dv_used - self._cruise_dv0   # actual, not commanded
+                self._mcc_spent = env._dv_used - self._cruise_dv0  # actual, not commanded
                 if clear and t_go > 300.0 and self._mcc_spent < self.MCC_BUDGET:
                     x, y, vx, vy = env.rocket_helio()
                     sol = lambert(env.star.mu, (x, y), self._aim_point(self.t_arrival), t_go)
@@ -1131,9 +1142,11 @@ class MarsAutopilot(MoonAutopilot):
                         mag = math.hypot(dvx, dvy)
                         if mag > self.MCC_MIN:
                             a_av = self._accel_avail_moon()
-                            return self._act_world(math.atan2(dvy, dvx),
-                                                   min(1.0, mag / (a_av * env.step_duration)),
-                                                   gate=0.3)
+                            return self._act_world(
+                                math.atan2(dvy, dvx),
+                                min(1.0, mag / (a_av * env.step_duration)),
+                                gate=0.3,
+                            )
                 return self._act_world(math.atan2(-vrel[1], -vrel[0]), 0.0)
 
         if self.mode in ("capture", "moon_orbit", "deorbit", "pdescend"):
@@ -1164,12 +1177,12 @@ class MarsAutopilot(MoonAutopilot):
 
 
 def fly(env: TwoStageToOrbitEnv, verbose: bool = True, pilot=None):
-    obs, info = env.reset()
+    _obs, info = env.reset()
     pilot = pilot or Autopilot(env)
     total_reward, last_print = 0.0, -1e9
     while True:
         action = pilot(info)
-        obs, reward, terminated, truncated, info = env.step(action)
+        _obs, reward, terminated, truncated, info = env.step(action)
         total_reward += reward
         if verbose and info["time"] - last_print >= 60.0:
             last_print = info["time"]
@@ -1221,22 +1234,32 @@ def main():
     apo = info["apoapsis"]
     apo_s = "inf" if not math.isfinite(apo) else f"{apo / 1000:.1f} km"
     print(f"end: {info['termination']}  after {info['time']:.0f} s")
-    print(f"orbit: {info['periapsis'] / 1000:.1f} x {apo_s} (cutoff {env.planet.space_altitude / 1000:.0f} km)")
+    print(
+        f"orbit: {info['periapsis'] / 1000:.1f} x {apo_s} (cutoff {env.planet.space_altitude / 1000:.0f} km)"
+    )
     if "pad_downrange" in info:
-        print(f"touchdown {info['pad_downrange'] / 1000:.2f} km from the pad "
-              f"at {info['speed']:.1f} m/s")
+        print(
+            f"touchdown {info['pad_downrange'] / 1000:.2f} km from the pad "
+            f"at {info['speed']:.1f} m/s"
+        )
     if "mars_distance" in info:
-        print(f"mars: {info['mars_altitude'] / 1000:.1f} km above the surface, "
-              f"{info['mars_rel_speed']:.0f} m/s relative, "
-              f"{info['mars_site_distance'] / 1000:.0f} km from the site")
+        print(
+            f"mars: {info['mars_altitude'] / 1000:.1f} km above the surface, "
+            f"{info['mars_rel_speed']:.0f} m/s relative, "
+            f"{info['mars_site_distance'] / 1000:.0f} km from the site"
+        )
     elif "moon_distance" in info:
         mvx, mvy = env._moon_velocity()
         rel = math.hypot(env._vx - mvx, env._vy - mvy)
-        print(f"moon: {(info['moon_distance'] - env.moon.radius) / 1000:.1f} km "
-              f"above the surface, {rel:.0f} m/s relative, "
-              f"{info['moon_site_distance'] / 1000:.0f} km from the site")
-    print(f"delta-v used {info['dv_used']:.0f} m/s of {env.total_delta_v():.0f} m/s budget "
-          f"({info['dv_remaining']:.0f} m/s still in the tank)")
+        print(
+            f"moon: {(info['moon_distance'] - env.moon.radius) / 1000:.1f} km "
+            f"above the surface, {rel:.0f} m/s relative, "
+            f"{info['moon_site_distance'] / 1000:.0f} km from the site"
+        )
+    print(
+        f"delta-v used {info['dv_used']:.0f} m/s of {env.total_delta_v():.0f} m/s budget "
+        f"({info['dv_remaining']:.0f} m/s still in the tank)"
+    )
     print(f"episode return: {total_reward:.1f}")
     env.close()
 

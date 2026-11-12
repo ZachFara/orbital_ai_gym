@@ -1,8 +1,8 @@
 import math
 
+import gymnasium as gym
 import numpy as np
 import pytest
-import gymnasium as gym
 
 from orbital_gym.missions.to_mars import ToMarsEnv
 
@@ -20,17 +20,19 @@ def test_registered_id_and_obs_size():
     obs, info = env.reset()
     assert obs.shape == (43,)
     assert info["soi"] == "planet"
-    assert len(env.unwrapped.rocket.stages) == 3
     env.close()
+    assert len(ToMarsEnv().rocket.stages) == 3
 
 
 def test_rails_are_keplerian_about_the_star():
     env = ToMarsEnv()
     mu = env.star.mu
     assert env.system.home_orbit_period == pytest.approx(
-        2.0 * math.pi * math.sqrt(env.home_r ** 3 / mu), rel=1e-9)
+        2.0 * math.pi * math.sqrt(env.home_r**3 / mu), rel=1e-9
+    )
     assert env.target.orbit_period == pytest.approx(
-        2.0 * math.pi * math.sqrt(env.target.orbit_radius ** 3 / mu), rel=1e-9)
+        2.0 * math.pi * math.sqrt(env.target.orbit_radius**3 / mu), rel=1e-9
+    )
 
 
 def test_tidal_acceleration_vanishes_at_the_planet():
@@ -50,16 +52,20 @@ def test_heliocentric_coast_conserves_energy_far_from_the_planets():
     env = ToMarsEnv()
     env.reset()
     R = 1.25 * env.target.orbit_radius
-    ang = env._home_angle() + math.pi          # opposite side of the star
+    ang = env._home_angle() + math.pi  # opposite side of the star
     hx, hy = env._home_helio()
     hvx, hvy = env._home_helio_velocity()
     s = math.sqrt(env.star.mu / R)
-    env._teleport(R * math.cos(ang) - hx, R * math.sin(ang) - hy,
-                  -s * math.sin(ang) - hvx, s * math.cos(ang) - hvy)
+    env._teleport(
+        R * math.cos(ang) - hx,
+        R * math.sin(ang) - hy,
+        -s * math.sin(ang) - hvx,
+        s * math.cos(ang) - hvy,
+    )
     _empty_tank(env)
     e0 = env._helio_elements()[2]
     for _ in range(3000):
-        _, _, term, trunc, info = env.step(IDLE)
+        _, _, term, _trunc, info = env.step(IDLE)
         assert not term
     assert info["soi"] == "sun"
     e1 = env._helio_elements()[2]
@@ -87,7 +93,7 @@ def test_target_frame_switch_and_thin_atmosphere():
         assert not truncated
         n += 1
     assert info["termination"] == "crashed"
-    g = env.target.mu / env.target.radius ** 2
+    g = env.target.mu / env.target.radius**2
     airless = math.sqrt(2.0 * g * 5_000.0)
     assert 0.85 * airless < info["mars_rel_speed"] < airless
 
@@ -120,10 +126,10 @@ def test_mars_autopilot_lands_softly_on_the_target():
     from scripts.autopilot_demo import MarsAutopilot
 
     env = ToMarsEnv()
-    obs, info = env.reset()
+    _obs, info = env.reset()
     pilot = MarsAutopilot(env)
     while True:
-        obs, _, terminated, truncated, info = env.step(pilot(info))
+        _obs, _, terminated, truncated, info = env.step(pilot(info))
         if terminated or truncated:
             break
     assert info["transfer"] is True
