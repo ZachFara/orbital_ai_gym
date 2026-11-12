@@ -121,10 +121,18 @@ tests for new behaviour, PR merged, this file updated.
 
 ### D. Publishing
 
-- [ ] **D1 Package for PyPI.** Namespaced ids (`orbital_gym/…`), version,
-  classifiers, `LICENSE`, a release workflow, the moon checkpoint as a
-  release asset. Done: `pip install orbital-gym` in a clean venv passes
-  the smoke test. Depends on B1.
+- [~] **D1 Package for PyPI.** Prepared locally (owner's rule: no external
+  publishing without them): metadata, MIT `LICENSE` (confirm the choice),
+  classifiers, URLs, namespaced ids (`orbital_gym/<id>` aliases every bare
+  id), the moon checkpoint committed as `docs/checkpoints/moon_landing_v0_ppo.zip`
+  (3.9 MB; the benchmark's PPO row reproduces from a clean clone), and
+  `.github/workflows/release.yml` (tag `vX.Y.Z` -> build, smoke-test the
+  wheel in a clean venv, GitHub release with the archives + checkpoint,
+  PyPI through trusted publishing). Verified: `uv build`, the wheel
+  installed in a clean venv passes `tests/test_smoke.py`. Left for the
+  owner: register `orbital-gym` on PyPI with this repo/workflow as a
+  trusted publisher (environment `pypi`), then `git tag v0.1.0 && git push
+  --tags`. Depends on B1.
 - [ ] **D2 Gymnasium third-party listing and Hub baselines.** PR to the
   Gymnasium docs third-party page; SB3 baselines on the Hugging Face Hub;
   a Colab for the easy rungs. Done: links in README. Depends on B3, D1.

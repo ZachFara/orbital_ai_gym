@@ -1,0 +1,66 @@
+name: release
+
+# A tag `vX.Y.Z` builds the wheel and sdist, checks the installed wheel with
+# the smoke test, publishes a GitHub release with the archives and the moon
+# checkpoint, and uploads to PyPI through trusted publishing (the owner
+# registers the project and this workflow as a trusted publisher on PyPI
+# first; until then the PyPI step fails without affecting the release).
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pip install uv
+      - name: Build the sdist and the wheel
+        run: uv build
+      - name: Smoke-test the wheel in a clean environment
+        run: |
+          uv venv --python 3.12 /tmp/clean
+          uv pip install --python /tmp/clean/bin/python dist/*.whl pytest
+          cp tests/test_smoke.py /tmp/test_smoke.py
+          cd /tmp && SDL_VIDEODRIVER=dummy /tmp/clean/bin/python -m pytest test_smoke.py -q
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: GitHub release with the archives and the moon checkpoint
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+            docs/checkpoints/moon_landing_v0_ppo.zip
+            docs/checkpoints/moon_landing_v0_ppo_vecnorm.pkl
+          generate_release_notes: true
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

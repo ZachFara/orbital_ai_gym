@@ -3,7 +3,7 @@
 import gymnasium as gym
 import orbital_gym
 
-env = gym.make("TwoStageToOrbit-v0")           # launch to a stable orbit
+env = gym.make("TwoStageToOrbit-v0")           # launch to a stable orbit (or "orbital_gym/TwoStageToOrbit-v0")
 env = gym.make("OrbitAndReturn-v0")            # ...then come home to the pad
 env = gym.make("ToMoon-v0")                    # orbit, hold, land on the moon
 env = gym.make("ToMars-v0")                    # three stages, a star, a Mars
@@ -18,7 +18,7 @@ env = gym.make("MoonLandingFromOrbit-v0", level=0.3)  # start closer to touchdow
 env = gym.make("MarsLandingFromOrbit-v0")             # the same leg at Mars
 """
 
-from gymnasium.envs.registration import register
+from gymnasium.envs.registration import register, registry
 
 from .missions.orbit_and_return import OrbitAndReturnEnv
 from .missions.to_mars import ToMarsEnv
@@ -44,6 +44,7 @@ from .touchdown import TouchdownRules
 
 __version__ = "0.1.0"
 __all__ = [
+    "ENV_IDS",
     "MOONS",
     "PLANETS",
     "ROCKETS",
@@ -111,3 +112,24 @@ register(
     entry_point="orbital_gym.rl.landing:MoonLandingFromOrbitV1",
     max_episode_steps=None,
 )
+
+# Gymnasium's convention for third-party packages is a namespaced id; the
+# bare ids above stay as aliases (decision 0006: ids never change meaning).
+ENV_IDS = (
+    "TwoStageToOrbit-v0",
+    "OrbitAndReturn-v0",
+    "ToMoon-v0",
+    "ToMars-v0",
+    "ToMoon-v1",
+    "MoonLandingFromOrbit-v0",
+    "MarsLandingFromOrbit-v0",
+    "MoonLandingFromOrbit-v1",
+)
+for _env_id in ENV_IDS:
+    _spec = registry[_env_id]
+    register(
+        id=f"orbital_gym/{_env_id}",
+        entry_point=_spec.entry_point,
+        max_episode_steps=None,
+        kwargs=dict(_spec.kwargs),
+    )
