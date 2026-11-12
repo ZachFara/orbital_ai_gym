@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import explog
 
-from orbital_gym.rl.moon_landing import RewardConfig
+from orbital_gym.rl.landing import RewardConfig
 from orbital_gym.rl.trainer import TrainConfig, TrainingRun, evaluate_checkpoint
 
 

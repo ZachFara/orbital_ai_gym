@@ -36,6 +36,7 @@ presets, and the renderer:
 | `ToMoon-v0` | reach orbit, hold, then transfer to a site on an orbiting moon |
 | `ToMars-v0` | three stages: escape the planet, cross a star system, land on a Mars-like planet |
 | `MoonLandingFromOrbit-v0` | practice: the moon mission's last leg, parking orbit to a soft touchdown on the site |
+| `MarsLandingFromOrbit-v0` | practice: the same leg at the Mars-like target, from a 150 km parking orbit through a thin atmosphere |
 
 **ToMoon** adds a moon on rails (circular orbit, closed-form position) whose
 gravity pulls on the rocket. After the same climb-and-hold as the return
@@ -189,7 +190,7 @@ python scripts/train_ppo.py --watch models/<run>.zip
 The moon landing is learned as its own task: the scripted pilot flies
 launch through capture into the lunar parking orbit (site-independent), and
 a PPO policy flies the deorbit, the powered descent and the touchdown to a
-random site. The task lives in `orbital_gym/rl/moon_landing.py` (expert
+random site. The task lives in `orbital_gym/rl/landing.py` (expert
 state bank, curriculum from the last metres back to anywhere in orbit,
 moon-frame actions, zero-effort guidance channels, potential-based
 shaping); the trainer (`orbital_gym/rl/trainer.py`, driven by
@@ -222,9 +223,17 @@ obs, info = env.reset(options={"site_angle": 1.57})         # or pick the site
 `level` runs from 0 (the last metres before touchdown) to 1 (anywhere
 from parking-orbit entry); the reference policy trains with a curriculum
 over it. The first `gym.make` flies the scripted pilot to build the state
-bank (about ten seconds, cached under `cache/`). `info["success"]` is a
-soft touchdown inside the site radius; `info["miss_km"]`,
-`info["moon_rel_speed"]` and `info["dv_spent"]` are the usual diagnostics.
+bank (about ten seconds for the moon, a minute for Mars; cached under
+`cache/`). `info["success"]` is a soft touchdown inside the site radius;
+`info["miss_km"]`, `info["rel_speed"]` (body-relative) and
+`info["dv_spent"]` are the usual diagnostics.
+
+`MarsLandingFromOrbit-v0` is the same wrapper over `ToMars-v0`
+(`orbital_gym/rl/landing.py`, one `LandingTask` per mission): the Mars
+pilot's orbit-first capture supplies the state bank, the reward scales
+follow the body (2.5 radii, the parking-orbit speed, 2.5 site radii) and
+the rest of the recipe is unchanged. No policy has been trained on it yet
+(see `PROGRESS.md`, E1).
 
 The reference result (run `ppo-zem-v15-polish`, see `EXPERIMENTS.md`),
 flown from the launch pad on a 48-site grid:

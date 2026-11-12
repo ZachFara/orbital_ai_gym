@@ -14,6 +14,7 @@ ENV_IDS = (
     "ToMoon-v0",
     "ToMars-v0",
     "MoonLandingFromOrbit-v0",
+    "MarsLandingFromOrbit-v0",
 )
 
 

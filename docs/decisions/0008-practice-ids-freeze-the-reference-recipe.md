@@ -10,10 +10,11 @@ Gymnasium id means picking one.
 
 ## Decision
 
-- A practice id (`MoonLandingFromOrbit-v0`, later the Mars one) is a thin
-  subclass that pins the reference configuration: the reward
-  (`REFERENCE_REWARD`), its shaping gamma, the exponential hover throttle
-  and the guidance channels. Those are not constructor knobs of the id.
+- A practice id (`MoonLandingFromOrbit-v0`, `MarsLandingFromOrbit-v0`) is a
+  thin subclass that pins the reference configuration: the reward
+  (`REFERENCE_REWARD`, its distance/speed scales following the body), its
+  shaping gamma, the exponential hover throttle and the guidance channels.
+  Those are not constructor knobs of the id.
 - The knobs it keeps are the practice ones: `level`, `site_noise`,
   `extra_obs`, `nominal`, `render_mode`, `seed`. Their defaults are the
   training distribution at full difficulty; `nominal=True` is the

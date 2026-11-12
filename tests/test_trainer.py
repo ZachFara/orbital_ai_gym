@@ -7,7 +7,7 @@ import dataclasses
 
 import pytest
 
-from orbital_gym.rl.moon_landing import RewardConfig
+from orbital_gym.rl.landing import RewardConfig
 from orbital_gym.rl.trainer import TrainConfig, summarize
 
 
@@ -48,7 +48,7 @@ def test_summarize_reads_the_episode_rows() -> None:
             soft=1,
             termination="landed_moon_site",
             miss_km=0.5,
-            moon_rel_speed=4.0,
+            rel_speed=4.0,
             dv_spent=1800.0,
             native_return=500.0,
         ),
@@ -57,7 +57,7 @@ def test_summarize_reads_the_episode_rows() -> None:
             soft=0,
             termination="crashed",
             miss_km=30.0,
-            moon_rel_speed=90.0,
+            rel_speed=90.0,
             dv_spent=900.0,
             native_return=-100.0,
         ),

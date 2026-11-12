@@ -157,6 +157,10 @@ class ToMoonEnv(TwoStageToOrbitEnv):
     def _moon_distance(self) -> float:
         return self.moon_body.distance(self._rx, self._ry, self._time)
 
+    def site_distance(self) -> float:
+        """Straight-line distance (m) from the rocket to the landing site."""
+        return self._moon_site_distance()
+
     def _moon_site_distance(self) -> float:
         sx, sy = self._moon_site_world()
         return math.hypot(self._rx - sx, self._ry - sy)
