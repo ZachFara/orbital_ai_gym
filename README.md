@@ -182,31 +182,30 @@ python scripts/train_ppo.py --mission return   # train the round trip
 python scripts/train_ppo.py --watch models/<run>.zip
 ```
 
-Or train **guided** by the scripted autopilots (much more sample-efficient,
-and the only sane way to learn the moon mission):
+The moon landing is learned as its own task: the scripted pilot flies
+launch through capture into the lunar parking orbit (site-independent), and
+a PPO policy flies the deorbit, the powered descent and the touchdown to a
+random site. The task lives in `orbital_gym/rl/moon_landing.py` (expert
+state bank, curriculum from the last metres back to anywhere in orbit,
+moon-frame actions, zero-effort guidance channels, potential-based
+shaping); the trainer in `scripts/train_moon_rl.py` logs every run to
+MLflow with a hypothesis, outcome and diagnosis (`python scripts/explog.py`
+prints the table; `EXPERIMENTS.md` mirrors it).
 
 ```bash
-python scripts/train_guided.py --mission moon          # or orbit / return
-python scripts/train_guided.py --mission moon --resume models/<run>.zip
-python scripts/train_guided.py --mission moon --eval 5 --watch models/<run>.zip
+python scripts/train_moon_rl.py --name my-run --hypothesis "what this tries"
+python scripts/fly_moon_policy.py models/my-run/best.zip --sites 48   # full mission, from the pad
+python scripts/fly_moon_policy.py models/my-run/best.zip --site 90 --render
 ```
 
-`train_guided.py` gives the policy three head starts: DART-style
-demonstrations (autopilot rolled with small action noise, its clean
-commands as labels), behavior cloning onto those demos, and a JSRL-style
-jump-start curriculum — every episode begins with the autopilot flying a
-random prefix of the mission before the policy takes over, and the maximum
-prefix anneals to zero, so the policy masters the landing before the
-launch. On the moon mission the policy starts from an expert that already
-soft-lands — a couple hundred km off target: reaching the site (and flying
-it cheaper) is what's left to learn.
+The reference result (run `ppo-zem-v15-polish`, see `EXPERIMENTS.md`),
+flown from the launch pad on a 48-site grid:
 
-`--resume models/<run>.zip` keeps training an existing model for `--steps`
-more steps, skipping the demo and cloning stages. Each run saves its
-reward-normalization statistics next to the model
-(`<run>_vecnorm.pkl`) so the resumed value function sees the same reward
-scale it trained on; older checkpoints without the file resume fine, the
-stats just re-warm.
+| | learned policy | scripted autopilot |
+|---|---|---|
+| on-site soft landings | 48 / 48 | 48 / 48 |
+| crashes | 0 | 0 |
+| mean mission return | 3065 | 3040-3090 |
 
 ## Spaces
 

@@ -12,7 +12,7 @@ eastward orbit meets it head-on at ~2 km/s closing speed), holds a low
 parking orbit, fires trans-lunar injection when the phasing solution enters
 its window, coasts out, and brakes retrograde into a soft off-site landing.
 Putting the touchdown ON the site is deliberately left to RL
-(train_guided.py starts its policies from this pilot's flights).
+(the RL task in orbital_gym.rl starts from this pilot's flights).
 
 Run:  python scripts/autopilot_demo.py [--mission orbit|return|moon] [--planet easy|earth] [--render]
 """
