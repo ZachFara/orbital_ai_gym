@@ -3,7 +3,7 @@
 ## Status (2026-11-12)
 
 Phase 1 merged (PR #1); repository public with branch protection. Phase 2
-in progress: A1, A2, A3 done. Four missions exist and are solved by scripted pilots;
+in progress: A1-A4 done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -34,7 +34,7 @@ tests for new behaviour, PR merged, this file updated.
   `_moon_*` alias hooks in `ToMarsEnv` are gone; `rendering.py` draws a
   list of bodies; `ToMoon-v0`/`ToMars-v0` scores are unchanged (tests
   assert the pilots' terminal outcomes). Depends on A2.
-- [ ] **A4 `Guidance` class.** `conic_impact`, the zero-effort miss and
+- [x] **A4 `Guidance` class.** `conic_impact`, the zero-effort miss and
   velocity and the stop-and-drop virtual miss in one class built from a
   body and a state; used by the observation and the potential. Done:
   `MoonLandingEnv._guidance_obs` and `_potential` call it; the predictor
@@ -138,4 +138,4 @@ hold; background training runs allowed; tasks strictly in listed order.
 
 ## Next steps
 
-1. A4 (`Guidance` class), then A5 onward in order.
+1. A5 (retire superseded trainers), then A6 onward in order.

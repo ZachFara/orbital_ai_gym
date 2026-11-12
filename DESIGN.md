@@ -27,6 +27,9 @@ orbital_gym/autopilots/   scripted reference pilots (one class per mission)
 orbital_gym/rendering.py  the pygame view; reads env state, imports nothing
                           from missions (duck-typed on the env)
 orbital_gym/missions/     the environments: physics, reward, termination
+orbital_gym/guidance.py   Guidance: zero-effort landing instruments for a
+                          body and a rocket state (conic impact, miss, stop
+                          ratio), used by the RL observation and potential
 orbital_gym/bodies.py     CelestialBody / CircularRails: moons, planets, stars
                           on rails (position, gravity, atmosphere, SOI,
                           elements, impact predictor)
@@ -37,7 +40,8 @@ orbital_gym/presets.py    plain dataclasses: planets, moons, stars, rockets
 Rules the import checker enforces:
 
 - `orbital_gym.presets` and `orbital_gym.kinematics` import nothing else
-  from the package; `orbital_gym.bodies` imports only those two.
+  from the package; `orbital_gym.bodies` and `orbital_gym.guidance` import
+  only those (guidance also bodies).
 - `orbital_gym.missions` imports `presets`, `kinematics`, `bodies` (and
   `rendering` lazily, inside `render()`, which is the Gymnasium convention).
 - `orbital_gym.rendering` imports only `presets`; it reads the env's
@@ -90,10 +94,10 @@ missions would multiply. The intended shape:
   act-in-world helpers, the shared ascent and hold; mission pilots override
   `_departure_ready` and `_transfer`. The landing logic reads its target
   through `self.body`.
-- **Guidance instruments** (`conic_impact`, the zero-effort miss and
-  velocity, the stop-and-drop virtual miss) as one `Guidance` class
-  constructed from a body and a state, used by both the observation and
-  the shaping potential instead of two code paths.
+- **`Guidance`** (done, A4): `conic_impact`, the zero-effort miss (actual
+  and stop-and-drop virtual, blended through the burn), stop ratio and
+  braking delta-v in one class built from a body and a state; the RL task's
+  observation channels and shaping potential both read it.
 - **Trainer composition**: `BoundedPPO`, the curriculum callback, the
   probe evaluator and the experiment logger are already separate classes;
   the remaining `main()` logic should become a `TrainingRun` object so the

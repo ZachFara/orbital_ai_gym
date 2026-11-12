@@ -109,12 +109,12 @@ include_external_packages = false
 name = "presets and kinematics are the bottom layer"
 type = "forbidden"
 source_modules = ["orbital_gym.presets", "orbital_gym.kinematics"]
-forbidden_modules = ["orbital_gym.bodies", "orbital_gym.missions", "orbital_gym.rendering", "orbital_gym.rl", "orbital_gym.autopilots"]
+forbidden_modules = ["orbital_gym.bodies", "orbital_gym.guidance", "orbital_gym.missions", "orbital_gym.rendering", "orbital_gym.rl", "orbital_gym.autopilots"]
 
 [[tool.importlinter.contracts]]
-name = "bodies sit on presets and kinematics only"
+name = "bodies and guidance sit on presets and kinematics only"
 type = "forbidden"
-source_modules = ["orbital_gym.bodies"]
+source_modules = ["orbital_gym.bodies", "orbital_gym.guidance"]
 forbidden_modules = ["orbital_gym.missions", "orbital_gym.rendering", "orbital_gym.rl", "orbital_gym.autopilots"]
 
 [[tool.importlinter.contracts]]
