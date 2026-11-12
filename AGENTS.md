@@ -63,6 +63,9 @@ Tool versions and the dev extra are in `pyproject.toml`.
 - Registered env ids are immutable benchmarks (decision 0006). New rules
   mean a new `-vN` id. Practice ids pin the reference recipe (decision
   0008); every env reports `info["success"]`.
+- The README benchmark table is the output of `python scripts/benchmark.py`
+  (decision 0009). A change that moves a row ships with the regenerated
+  table.
 - `ToMarsEnv` exposes its target through the moon hook names
   (`moon`, `_moon_world`, …) so the renderer works; `DESIGN.md` schedules a
   `CelestialBody` abstraction to replace this.

@@ -244,6 +244,48 @@ flown from the launch pad on a 48-site grid:
 | crashes | 0 | 0 |
 | mean mission return | 3065 | 3040-3090 |
 
+## Benchmark
+
+A fixed protocol per env (decision 0009): the missions with a landing site
+fly an even grid of 8 sites, the others 8 seeds, the practice ids their
+evaluation distribution (parking-orbit entry, 16 sites). Three baselines:
+a uniformly random policy, the most capable scripted pilot, and a trained
+policy where one exists. `success` is the env's own `info["success"]`;
+`return` is the env's reward summed over the episode (the shaped reward for
+the practice ids). Reproduce with one command (the `--ppo` model is the
+reference checkpoint, `EXPERIMENTS.md`; GIFs below are its `--record`):
+
+```bash
+python scripts/benchmark.py --ppo MoonLandingFromOrbit-v0=models/ppo-zem-v15-polish/best_100pct.zip --record docs/media
+```
+
+| env | policy | episodes | success | mean return | mean dv (m/s) | mean steps | outcomes |
+|---|---|---:|---:|---:|---:|---:|---|
+| `TwoStageToOrbit-v0` | random | 8 | 0% | -100 | 484 | 39 | crashed 8 |
+| `TwoStageToOrbit-v0` | autopilot | 8 | 100% | 7460 | 4266 | 4000 | time_limit 8 |
+| `OrbitAndReturn-v0` | random | 8 | 0% | -100 | 484 | 39 | crashed 8 |
+| `OrbitAndReturn-v0` | autopilot | 8 | 100% | 601 | 5217 | 2212 | landed_on_pad 8 |
+| `ToMoon-v0` | random | 8 | 0% | -100 | 488 | 39 | crashed 8 |
+| `ToMoon-v0` | autopilot | 8 | 88% | 3032 | 8444 | 5615 | landed_moon_site 7, landed_moon 1 |
+| `ToMars-v0` | random | 8 | 0% | -101 | 681 | 66 | crashed 8 |
+| `ToMars-v0` | autopilot | 8 | 0% | 2121 | 8600 | 16100 | landed_mars 8 |
+| `MoonLandingFromOrbit-v0` | random | 16 | 0% | -7 | 9502 | 828 | crashed 13, window_limit 2, escaped 1 |
+| `MoonLandingFromOrbit-v0` | autopilot | 16 | 81% | 12 | 8431 | 727 | landed_moon_site 13, landed_moon 3 |
+| `MoonLandingFromOrbit-v0` | ppo | 16 | 100% | 14 | 7993 | 639 | landed_moon_site 16 |
+| `MarsLandingFromOrbit-v0` | random | 16 | 0% | -8 | 11612 | 4086 | window_limit 12, crashed 4 |
+| `MarsLandingFromOrbit-v0` | autopilot | 16 | 0% | 5 | 8609 | 2565 | landed_mars 16 |
+
+Read the rows as the state of the ladder, not a leaderboard: the moon pilot
+lands on the site 7 of 8 times from the pad; the Mars pilot lands soft every
+time but ~100 km off a 20 km site, so `MarsLandingFromOrbit-v0` is open; the
+learned moon policy beats its own expert from orbit (16 of 16).
+
+| `ToMoon-v0`, orbit-first pilot | `MoonLandingFromOrbit-v0`, PPO |
+|---|---|
+| ![ToMoon autopilot](docs/media/ToMoon_autopilot.gif) | ![moon landing by the policy](docs/media/MoonLandingFromOrbit_ppo.gif) |
+| `ToMars-v0`, pilot | `MarsLandingFromOrbit-v0`, pilot |
+| ![ToMars autopilot](docs/media/ToMars_autopilot.gif) | ![Mars landing from orbit by the pilot](docs/media/MarsLandingFromOrbit_autopilot.gif) |
+
 ## Spaces
 
 **Action** — `Box(-1, 1, (2,))`, or `(3,)` with `auto_stage=False`:
