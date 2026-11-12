@@ -3,7 +3,7 @@
 ## Status (2026-11-12)
 
 Phase 1 merged (PR #1); repository public with branch protection. Phase 2
-in progress: A1, A2 done. Four missions exist and are solved by scripted pilots;
+in progress: A1, A2, A3 done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -28,7 +28,7 @@ tests for new behaviour, PR merged, this file updated.
   override only their transfer logic. Done: `MoonAutopilot` and
   `MarsAutopilot` share the ascent code instead of copying it; all mission
   tests pass unchanged. Depends on A1.
-- [ ] **A3 `CelestialBody` abstraction.** A class (position, velocity,
+- [x] **A3 `CelestialBody` abstraction.** A class (position, velocity,
   radius, mu, atmosphere, SOI, impact predictor, frame elements) used by
   `ToMoonEnv`, `ToMarsEnv`, the renderer and the pilots. Done: the
   `_moon_*` alias hooks in `ToMarsEnv` are gone; `rendering.py` draws a
@@ -138,4 +138,4 @@ hold; background training runs allowed; tasks strictly in listed order.
 
 ## Next steps
 
-1. A3 (`CelestialBody` abstraction), then A4 onward in order.
+1. A4 (`Guidance` class), then A5 onward in order.

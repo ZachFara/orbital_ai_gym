@@ -14,16 +14,18 @@ Design notes:
   markers.
 - rgb_array mode draws to a plain Surface and never opens a window, so it
   works headless (tests, video capture) without a display.
-- Secondary bodies come through the env's "moon" hooks (ToMoon's moon, or
-  ToMars's target); a ToMars env additionally exposes its star, and once the
-  rocket leaves the planet's sphere of influence the map view becomes a
-  system view centred on the star.
+- Secondary bodies are the env's `bodies` list of `CelestialBody` objects
+  (ToMoon's moon; ToMars's star and target). Inside a body's sphere of
+  influence the map view re-centres on it; once the rocket leaves the
+  planet's own sphere in a star system, the view becomes a system view
+  centred on the star with the planets' orbit circles.
 """
 
 from __future__ import annotations
 
 import math
 import random
+from typing import ClassVar
 
 import numpy as np
 
@@ -107,20 +109,36 @@ class Renderer:
 
     # --- camera ---------------------------------------------------------------
 
+    def _bodies(self):
+        """The env's secondary `CelestialBody` objects (none for the pure
+        launch-planet missions)."""
+        return list(getattr(self.env, "bodies", []))
+
     def _soi(self):
         """The body whose sphere of influence the rocket is in:
-        ("planet"|"moon"|"sun", center_x, center_y, mu, body_radius). "moon"
-        is whatever secondary body the env exposes through the moon hooks
-        (the Mars-like target of ToMars included); "sun" is the star of a
-        ToMars system once the rocket has left the planet's sphere."""
+        (name, center_x, center_y, mu, body_radius, body). Secondary bodies
+        win over the planet (smallest sphere first); a star counts only once
+        the rocket has left the planet's own sphere; `body` is None for the
+        launch planet."""
         env = self.env
-        if hasattr(env, "moon_soi") and env._in_moon_soi():
-            mx, my = env._moon_world()
-            return "moon", mx, my, env.moon.mu, env.moon.radius
-        if hasattr(env, "_sun_world") and not env._in_planet_soi():
-            sx, sy = env._sun_world()
-            return "sun", sx, sy, env.star.mu, env.sun_radius
-        return "planet", 0.0, 0.0, env.planet.mu, env.planet.radius
+        t = env._time
+        bodies = self._bodies()
+        for body in sorted((b for b in bodies if b.kind != "star"), key=lambda b: b.soi):
+            if body.in_soi(env._rx, env._ry, t):
+                bx, by = body.position(t)
+                return body.name, bx, by, body.mu, body.radius, body
+        planet_soi = getattr(env, "planet_soi", math.inf)
+        if math.hypot(env._rx, env._ry) > planet_soi:
+            for body in bodies:
+                if body.kind == "star":
+                    bx, by = body.position(t)
+                    return body.name, bx, by, body.mu, body.radius, body
+        return "planet", 0.0, 0.0, env.planet.mu, env.planet.radius, None
+
+    def _system_span(self) -> float:
+        """Half-width of the whole-system view: the widest orbit around the star."""
+        radii = list(getattr(self.env, "system_orbit_radii", []))
+        return 1.05 * max(radii) if radii else 0.0
 
     def _camera(self):
         env = self.env
@@ -145,19 +163,19 @@ class Renderer:
         # moon and the span shrinks to moon scale. The focus factor is
         # smoothed so crossing the boundary glides instead of jumping;
         # at 1 the focus tracks the (moving) moon exactly, lag-free.
-        soi, sx, sy, _, soi_body_r = self._soi()
+        soi, sx, sy, _, soi_body_r, body = self._soi()
         mx, my = sx, sy
-        if soi == "moon":
+        if body is not None and body.kind != "star":
             blend_t = 1.0
             d = math.hypot(env._rx - mx, env._ry - my)
             span_map = 1.15 * (soi_body_r + max(d - soi_body_r, 0.35 * soi_body_r))
-        elif soi == "sun":
+        elif body is not None:
             # system view: the star at the centre, wide enough for the
-            # target's orbit and for wherever the rocket has got to
+            # widest orbit and for wherever the rocket has got to
             blend_t = 1.0
             d = math.hypot(env._rx - mx, env._ry - my)
-            span_map = 1.15 * max(d, 1.05 * env.target.orbit_radius)
-        want_f = 1.0 if soi in ("moon", "sun") else 0.0
+            span_map = 1.15 * max(d, self._system_span())
+        want_f = 1.0 if body is not None else 0.0
         if self._span is None:
             self._fblend = want_f  # first frame ever: start converged
             self._focus_name = soi
@@ -318,18 +336,18 @@ class Renderer:
         arriving lander is hyperbolic relative to the moon right up to the
         capture burn, and it should still see where it is headed."""
         env = self.env
-        soi, bx, by, mu, body_r = self._soi()
+        _soi_name, bx, by, mu, body_r, body = self._soi()
         rx, ry = env._rx - bx, env._ry - by
-        if soi == "moon":
-            mvx, mvy = env._moon_velocity()
+        if body is not None and body.kind != "star":
+            mvx, mvy = body.velocity(env._time)
             vx, vy = env._vx - mvx, env._vy - mvy
-            min_apo = 0.05 * body_r  # any bound moon orbit is interesting
-            r_lim = env.moon_soi
-        elif soi == "sun":
-            svx, svy = env._sun_velocity()
+            min_apo = 0.05 * body_r  # any bound orbit about the body is interesting
+            r_lim = body.soi
+        elif body is not None:
+            svx, svy = body.velocity(env._time)
             vx, vy = env._vx - svx, env._vy - svy
             min_apo = 0.05 * body_r
-            r_lim = 3.0 * env.target.orbit_radius
+            r_lim = 3.0 * self._system_span()
         else:
             vx, vy = env._vx, env._vy
             min_apo = 0.3 * env.planet.space_altitude
@@ -415,46 +433,49 @@ class Renderer:
                 self.pg.draw.aaline(self.surf, color, prev, s)
             prev = s if ok else None
 
-    def _draw_star_system(self, cam):
-        """ToMars: the star, and the launch planet's and target's orbits
-        around it (only when the view is wide enough to show them)."""
+    BODY_COLORS: ClassVar[dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]]] = {
+        "moon": (MOON, MOON_SHADE),
+        "planet": (MARS, MARS_SHADE),
+    }
+
+    def _draw_star(self, body, cam):
+        """A star, and the orbit circles of the system around it (only when
+        the view is wide enough to show them)."""
         env = self.env
-        if not hasattr(env, "_sun_world"):
-            return
-        sx, sy = env._sun_world()
-        center = self._to_screen(sx, sy, cam)
+        center = self._to_screen(*body.position(env._time), cam)
         ppm = cam[2]
-        for radius in (env.home_r, env.target.orbit_radius):
+        for radius in getattr(env, "system_orbit_radii", []):
             r_px = radius * ppm
             if 20 < r_px < 20000 and self._on_screen(center, margin=r_px + 50):
                 self.pg.draw.circle(self.surf, SYSTEM_ORBIT, center, r_px, width=1)
         if self._on_screen(center, margin=400):
-            r_px = max(4.0, env.sun_radius * ppm)
+            r_px = max(4.0, body.radius * ppm)
             self.pg.draw.circle(self.surf, SUN_GLOW, center, r_px * 1.8)
             self.pg.draw.circle(self.surf, SUN, center, r_px)
 
     def _draw_secondary_bodies(self, cam):
+        """Every `CelestialBody` the env has: stars with their system orbits,
+        moons and planets with their sphere of influence and landing site."""
         env = self.env
-        self._draw_star_system(cam)
-        if not hasattr(env, "_moon_world"):
-            return
-        try:
-            mx, my = env._moon_world()
-            sx, sy = env._moon_site_world()
-            mr = env.moon.radius
-        except Exception:
-            return
-
-        body, shade = (MARS, MARS_SHADE) if hasattr(env, "_sun_world") else (MOON, MOON_SHADE)
-        center = self._to_screen(mx, my, cam)
-        if self._on_screen(center, margin=200):
-            r_px = max(3.0, mr * cam[2])
-            self.pg.draw.circle(self.surf, body, center, r_px)
+        t = env._time
+        site_angle = getattr(env, "_site_angle", None)
+        for body in self._bodies():
+            if body.kind == "star":
+                self._draw_star(body, cam)
+                continue
+            fill, shade = self.BODY_COLORS.get(body.kind, (MOON, MOON_SHADE))
+            center = self._to_screen(*body.position(t), cam)
+            if not self._on_screen(center, margin=200):
+                continue
+            r_px = max(3.0, body.radius * cam[2])
+            self.pg.draw.circle(self.surf, fill, center, r_px)
             self.pg.draw.circle(self.surf, shade, center, r_px, width=2)
-            soi_px = getattr(env, "moon_soi", 0.0) * cam[2]
+            soi_px = body.soi * cam[2]
             if 1.4 * r_px < soi_px < 2500:
                 self.pg.draw.circle(self.surf, SPACE_LINE, center, soi_px, width=1)
-            site = self._to_screen(sx, sy, cam)
+            if site_angle is None:
+                continue
+            site = self._to_screen(*body.site_world(t, site_angle), cam)
             if self._on_screen(site, margin=100):
                 self.pg.draw.circle(self.surf, MOON_SITE, site, 4)
                 self.surf.blit(
@@ -551,16 +572,15 @@ class Renderer:
         # inside a secondary body's SOI the headline numbers go body-relative,
         # matching the frame the info elements switched to; between bodies
         # (ToMars) they go heliocentric
-        soi_name = info.get("soi")
-        in_moon = soi_name in ("moon", "mars")
-        in_sun = soi_name == "sun"
-        if in_moon:
-            alt_km = (info["moon_distance"] - info["moon_radius"]) / 1000
-            speed = info["moon_rel_speed"]
-        elif in_sun:
-            alt_km = info["sun_distance"] / 1000
-            _x, y, vx, vy = env.rocket_helio()
-            speed = math.hypot(vx, vy)
+        soi_name, _bx, _by, _mu, _r, body = self._soi()
+        in_moon = body is not None and body.kind != "star"
+        in_sun = body is not None and body.kind == "star"
+        if body is not None and in_moon:
+            alt_km = body.altitude(env._rx, env._ry, env._time) / 1000
+            speed = body.relative_speed(env._rx, env._ry, env._vx, env._vy, env._time)
+        elif body is not None:
+            alt_km = body.distance(env._rx, env._ry, env._time) / 1000
+            speed = body.relative_speed(env._rx, env._ry, env._vx, env._vy, env._time)
         else:
             alt_km = info["altitude"] / 1000
             speed = info["speed"]

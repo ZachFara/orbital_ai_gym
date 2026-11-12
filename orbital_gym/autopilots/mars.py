@@ -74,23 +74,6 @@ class MarsAutopilot(MoonAutopilot):
         self._aim_offset = (0.0, 0.0)
         self.plan_log = []
 
-    # the moon pilot's helpers read "the moon" through these two
-    def _state(self):
-        e = self.env
-        r = np.array([e._rx, e._ry])
-        v = np.array([e._vx, e._vy])
-        ang = e._mars_angle()
-        w = e.target_w
-        mpos = np.array(e._mars_world())
-        mvel = np.array(e._mars_velocity())
-        return r, v, ang, w, mpos, mvel
-
-    def _site_dir(self, tau: float) -> np.ndarray:
-        a = self.env._mars_angle(self.env._time + tau) + self.env._site_angle
-        return np.array([math.cos(a), math.sin(a)])
-
-    # -- departure solver -------------------------------------------------------
-
     def _gap_from_state(self, x, y, vx, vy, t0: float, dv: float = 0.0):
         """Arrival phase gap of the heliocentric conic through (x, y, vx, vy)
         at time t0: the target's angle when the conic next crosses the
@@ -332,7 +315,7 @@ class MarsAutopilot(MoonAutopilot):
 
         if self.mode in ("capture", "moon_orbit", "deorbit", "pdescend"):
             if self.mode == "capture":
-                peri, _, energy, ecc = env._mars_orbit_elements()
+                peri, _, energy, ecc = self._body_elements()
                 malt = d - env.target.radius
                 # the moon pilot waits to drop below CAPTURE_ALT; if the aim was
                 # off and the periapsis is higher, insert anyway once receding

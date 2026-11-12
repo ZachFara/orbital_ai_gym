@@ -106,10 +106,16 @@ root_packages = ["orbital_gym", "scripts", "tests", "tools"]
 include_external_packages = false
 
 [[tool.importlinter.contracts]]
-name = "presets are the bottom layer"
+name = "presets and kinematics are the bottom layer"
 type = "forbidden"
-source_modules = ["orbital_gym.presets"]
-forbidden_modules = ["orbital_gym.missions", "orbital_gym.rendering", "orbital_gym.rl"]
+source_modules = ["orbital_gym.presets", "orbital_gym.kinematics"]
+forbidden_modules = ["orbital_gym.bodies", "orbital_gym.missions", "orbital_gym.rendering", "orbital_gym.rl", "orbital_gym.autopilots"]
+
+[[tool.importlinter.contracts]]
+name = "bodies sit on presets and kinematics only"
+type = "forbidden"
+source_modules = ["orbital_gym.bodies"]
+forbidden_modules = ["orbital_gym.missions", "orbital_gym.rendering", "orbital_gym.rl", "orbital_gym.autopilots"]
 
 [[tool.importlinter.contracts]]
 name = "missions do not import the layers above them"
@@ -118,10 +124,10 @@ source_modules = ["orbital_gym.missions"]
 forbidden_modules = ["orbital_gym.rl", "orbital_gym.autopilots"]
 
 [[tool.importlinter.contracts]]
-name = "rendering is a view: only presets below it"
+name = "rendering is a view: duck-typed on the env, imports no mission"
 type = "forbidden"
 source_modules = ["orbital_gym.rendering"]
-forbidden_modules = ["orbital_gym.missions", "orbital_gym.rl"]
+forbidden_modules = ["orbital_gym.missions", "orbital_gym.rl", "orbital_gym.autopilots"]
 
 [[tool.importlinter.contracts]]
 name = "the package never imports scripts or tests"
