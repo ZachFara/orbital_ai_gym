@@ -30,7 +30,7 @@ from stable_baselines3.common.utils import explained_variance
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor, VecNormalize
 from torch.nn import functional as F
 
-from .moon_landing import (
+from .landing import (
     BANK_PATH,
     REFERENCE_GAMMA,
     REFERENCE_REWARD,
@@ -305,7 +305,7 @@ def summarize(rows: list[dict[str, Any]], prefix_return: float) -> Metrics:
             np.mean([r["termination"] in ("window_limit", "time_limit") for r in rows])
         ),
         "miss_km_med": float(np.median([r["miss_km"] for r in rows])),
-        "rel_med": float(np.median([r["moon_rel_speed"] for r in rows])),
+        "rel_med": float(np.median([r["rel_speed"] for r in rows])),
         "dv_mean": float(np.mean([r["dv_spent"] for r in rows])),
         "native": native,
         "full_mission": native + prefix_return,
@@ -320,7 +320,7 @@ def evaluate(model: Any, env: MoonLandingEnv, episodes: int, verbose: bool = Tru
         for site, r in zip(sites, rows, strict=True):
             print(
                 f"  site {math.degrees(site):+7.1f}: {r['termination']:<16} "
-                f"rel {r['moon_rel_speed']:6.1f} m/s  miss {r['miss_km']:6.1f} km  "
+                f"rel {r['rel_speed']:6.1f} m/s  miss {r['miss_km']:6.1f} km  "
                 f"dv {r['dv_spent']:5.0f}  native {r['native_return']:6.0f}"
             )
     out = summarize(rows, env.bank.prefix_return)
@@ -355,7 +355,7 @@ def episode_stats(info: dict[str, Any]) -> dict[str, float]:
         "timeout": float(info["termination"] in ("window_limit", "time_limit")),
         "escape": float(info["termination"] == "escaped"),
         "miss_km": float(info["miss_km"]),
-        "rel": float(info["moon_rel_speed"]),
+        "rel": float(info["rel_speed"]),
         "ret": float(info["episode"]["r"]),
         "len": float(info["episode"]["l"]),
         "native": float(info["native_return"]),

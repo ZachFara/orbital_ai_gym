@@ -14,6 +14,7 @@ expert state, with difficulty knobs and `info["success"]`:
 
 env = gym.make("MoonLandingFromOrbit-v0")             # parking orbit -> site
 env = gym.make("MoonLandingFromOrbit-v0", level=0.3)  # start closer to touchdown
+env = gym.make("MarsLandingFromOrbit-v0")             # the same leg at Mars
 """
 
 from gymnasium.envs.registration import register
@@ -87,6 +88,11 @@ register(
 # expert state. The wrapper enforces its own step window.
 register(
     id="MoonLandingFromOrbit-v0",
-    entry_point="orbital_gym.rl.moon_landing:MoonLandingFromOrbit",
+    entry_point="orbital_gym.rl.landing:MoonLandingFromOrbit",
+    max_episode_steps=None,
+)
+register(
+    id="MarsLandingFromOrbit-v0",
+    entry_point="orbital_gym.rl.landing:MarsLandingFromOrbit",
     max_episode_steps=None,
 )

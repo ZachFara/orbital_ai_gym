@@ -3,7 +3,7 @@
 ## Status (2026-11-12)
 
 Phase 1 merged (PR #1); repository public with branch protection. Phase 2
-in progress: A1-A7 and B1 done. Four missions exist and are solved by scripted pilots;
+in progress: A1-A7, B1 and B2 done. Four missions exist and are solved by scripted pilots;
 a learned PPO policy lands the moon mission on the site 48/48 from the
 launch pad (`EXPERIMENTS.md`). `ToMars-v0` has no RL attempt yet. The
 quality gates are in place with a documented baseline of exceptions for
@@ -65,16 +65,23 @@ tests for new behaviour, PR merged, this file updated.
 ### B. The practice ladder
 
 - [x] **B1 Register `MoonLandingFromOrbit-v0`.** `MoonLandingFromOrbit`
-  (`orbital_gym/rl/moon_landing.py`) pins the reference reward, gamma,
+  (`orbital_gym/rl/landing.py`) pins the reference reward, gamma,
   throttle map and guidance channels (decision 0008) and keeps `level`,
   `site_noise`, `extra_obs`, `nominal`; the bank builds on first use
   (~10 s). Every env reports `info["success"]` (`SUCCESS` per mission
   class). Done: `gym.make` works from a fresh checkout (CI builds the
   bank); README documents it; `tests/test_smoke.py` covers the id, its
   knobs and the flag. Depends on A1.
-- [ ] **B2 Register `MarsLandingFromOrbit-v0`.** Same wrapper over
-  `ToMarsEnv` with a Mars bank from `MarsAutopilot`. Done: as B1. Depends
-  on A3, B1.
+- [x] **B2 Register `MarsLandingFromOrbit-v0`.** The wrapper is now
+  body-agnostic (`orbital_gym/rl/landing.py`: `LandingEnv` + a
+  `LandingTask` per mission with env, orbit-first pilot, bank path,
+  outcome names and body-scaled reward); `moon_landing.py` is a re-export
+  shim so cached banks unpickle. `MarsAutopilot` already captures into a
+  150 km parking orbit, so its from-orbit segment is the Mars bank
+  (24 sites, ~60 s, horizon 20k steps because the deorbit wait can be a
+  whole orbit). Done: `gym.make` works; README documents it;
+  `tests/test_landing.py` + smoke cover it; the moon task is bit-identical
+  (v15 `--eval 8` reproduces the same eight returns). Depends on A3, B1.
 - [ ] **B3 Benchmark protocol and baselines.** Fixed site grid and seeds
   per env; `scripts/benchmark.py` producing the table (random, autopilot,
   PPO); table in README with GIFs. Done: table reproducible by one
@@ -125,7 +132,7 @@ where listed) and delete its entry from `pyproject.toml`.
 - [ ] F2 `orbital_gym/rendering.py` (also `_orbit_path`, `_draw_hud`
   complexity)
 - [ ] F3 `orbital_gym/missions/to_moon.py`, `to_mars.py`,
-  `orbit_and_return.py` and `orbital_gym/rl/moon_landing.py`
+  `orbit_and_return.py` and `orbital_gym/rl/landing.py`
 - [ ] F4 `orbital_gym/autopilots/*` (also the `__call__` methods and
   `lambert` complexity; folds into A2)
 - [ ] F5 `scripts/fly_manual.py`, `fly_moon_policy.py`, `train_ppo.py`
@@ -147,4 +154,4 @@ hold; background training runs allowed; tasks strictly in listed order.
 
 ## Next steps
 
-1. B2 (`MarsLandingFromOrbit-v0`), then B3 onward in order.
+1. B3 (benchmark protocol and baselines), then B4 onward in order.

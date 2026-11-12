@@ -78,7 +78,7 @@ module = [
     "orbital_gym.missions.orbit_and_return",
     "orbital_gym.missions.to_moon",
     "orbital_gym.missions.to_mars",
-    "orbital_gym.rl.moon_landing",
+    "orbital_gym.rl.landing",
     "orbital_gym.autopilots.*",
     "scripts.autopilot_demo",
     "scripts.fly_manual",

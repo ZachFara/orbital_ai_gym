@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from stable_baselines3 import PPO
 
-from orbital_gym.rl.moon_landing import MoonLandingEnv, load_bank
+from orbital_gym.rl.landing import MoonLandingEnv, load_bank
 
 
 def fly(
@@ -78,8 +78,10 @@ def fly(
     return dict(
         site=site_deg,
         termination=info["termination"],
-        rel=info["moon_rel_speed"],
-        miss_km=info["moon_site_distance"] / 1000,
+        success=info["success"],
+        soft=info["soft"],
+        rel=info["rel_speed"],
+        miss_km=info["miss_km"],
         policy_steps=n,
         native_total=u._episode_return,
         prefix_return=prefix_return,
@@ -140,8 +142,8 @@ def main():
             f"miss {r['miss_km']:6.1f} km  policy steps {r['policy_steps']:4d}  "
             f"mission return {r['native_total']:7.1f}  dv left {r['dv_left']:5.0f} m/s"
         )
-    on = np.mean([r["termination"] == "landed_moon_site" for r in rows])
-    soft = np.mean([r["termination"] in ("landed_moon_site", "landed_moon") for r in rows])
+    on = np.mean([r["success"] for r in rows])
+    soft = np.mean([r["soft"] for r in rows])
     print("-" * 72)
     print(
         f"on-site {on:.0%}  soft {soft:.0%}  mean mission return {np.mean([r['native_total'] for r in rows]):.0f}  "

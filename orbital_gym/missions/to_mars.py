@@ -217,6 +217,10 @@ class ToMarsEnv(TwoStageToOrbitEnv):
     def _mars_distance(self) -> float:
         return self.target_body.distance(self._rx, self._ry, self._time)
 
+    def site_distance(self) -> float:
+        """Straight-line distance (m) from the rocket to the landing site."""
+        return self._mars_site_distance()
+
     def _mars_site_distance(self) -> float:
         sx, sy = self._mars_site_world()
         return math.hypot(self._rx - sx, self._ry - sy)
